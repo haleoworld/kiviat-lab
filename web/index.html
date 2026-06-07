@@ -102,8 +102,11 @@ async function loadDashboard(family){
     const col = STATUS_COLOR[r.status]||'text-neutral-400';
     const tag = r.status==='ok'?'on target':(r.status==='missing'?'missing':(r.drift_pp>0?`+${r.drift_pp}pp`:`${r.drift_pp}pp`));
     return `<div class="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-800 last:border-0">
-      <span class="text-sm min-w-0 truncate">${r.label}</span>
-      <span class="num text-sm shrink-0 whitespace-nowrap"><span class="text-neutral-200">${r.actual_pct}%</span>
+      <div class="min-w-0">
+        <div class="text-sm truncate">${r.label}</div>
+        <div class="num text-xs text-neutral-500">${CUR(r.actual_value)}</div>
+      </div>
+      <span class="num text-sm shrink-0 whitespace-nowrap text-right"><span class="text-neutral-200">${r.actual_pct}%</span>
         <span class="text-neutral-600"> / ${r.target_pct}%</span>
         <span class="${col} ml-2">${tag}</span></span></div>`;
   }).join('');
@@ -123,6 +126,24 @@ async function loadDashboard(family){
     ${(al.missing_data_flags||[]).map(f=>`<p class="text-[11px] text-amber-400/80 mt-1">⚠ ${f}</p>`).join('')}
   </div>`;
 
+  // By account
+  const aa = d.by_account || {accounts:[], total:0, confidence:'low'};
+  const accRows = aa.accounts.map(a=>{
+    const mix = a.mix.map(m=>`${m.label.replace('Equities — ','')} ${m.pct}%`).join(' · ');
+    return `<div class="py-2 border-b border-neutral-800 last:border-0">
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-sm font-medium min-w-0 truncate">${a.account}</span>
+        <span class="num text-sm shrink-0">${CUR(a.value)} <span class="text-neutral-500">· ${a.pct}%</span></span>
+      </div>
+      <div class="text-[11px] text-neutral-500 mt-0.5 truncate">${mix}</div>
+    </div>`;
+  }).join('');
+  const accCard = `<div class="card p-4">
+    <div class="flex items-center justify-between"><h2 class="font-semibold">By account</h2>${confBadge(aa.confidence)}</div>
+    <p class="text-xs text-neutral-500 mt-1 mb-2">Value · share of total portfolio (${CUR(aa.total)}) · internal mix</p>
+    ${accRows}
+  </div>`;
+
   // Risks
   const risks = rk.risks.map((x,i)=>`<div class="card p-4">
     <div class="flex items-start justify-between gap-2">
@@ -135,7 +156,7 @@ async function loadDashboard(family){
       <h2 class="font-semibold">Top risks</h2>${confBadge(rk.confidence)}</div>
       <div class="space-y-3">${risks}</div></div>`;
 
-  c.innerHTML = hero + cfCard + alCard + rkSection;
+  c.innerHTML = hero + cfCard + alCard + accCard + rkSection;
 
   // Donut of actual allocation (value>0 only)
   const live = al.rows.filter(r=>r.actual_value>0);

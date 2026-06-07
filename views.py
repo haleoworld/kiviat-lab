@@ -247,6 +247,46 @@ def allocation(snap: dict, target: dict, holdings: list = None, fx_usd_cad: floa
     }
 
 
+ACCOUNT_LABELS = {
+    "TFSA": "TFSA", "RRSP": "RRSP", "RESP1": "RESP #1", "RESP2": "RESP #2",
+    "Corp": "Corp brokerage",
+}
+
+
+def account_allocation(snap: dict, holdings: list = None, fx_usd_cad: float = 1.0) -> dict:
+    """Per-account value, share of total portfolio, and internal category mix (CAD, book)."""
+    holdings = holdings or []
+    accts: dict[str, dict] = {}
+
+    def add(name, cat, val):
+        a = accts.setdefault(name, {"value": 0.0, "by_cat": {}})
+        a["value"] += val
+        a["by_cat"][cat] = a["by_cat"].get(cat, 0) + val
+
+    for h in holdings:
+        val = (h.get("book") or 0) * (fx_usd_cad if h.get("currency") == "USD" else 1)
+        add(ACCOUNT_LABELS.get(h.get("account"), h.get("account")),
+            h.get("category", "equities_uncat"), val)
+    for a in snap.get("accounts", []):
+        if a.get("asset_class") == "cash_tbill":  # chequing
+            add(a.get("name"), "cash_tbill", a.get("value") or 0)
+    re = sum(((p.get("purchase_price") or p.get("value") or 0) - (p.get("mortgage") or 0))
+             for p in snap.get("properties", []))
+    if re:
+        add("Real Estate (equity)", "real_estate", re)
+
+    total = sum(a["value"] for a in accts.values()) or 1
+    rows = []
+    for name, a in accts.items():
+        mix = [{"label": CATEGORY_LABELS.get(c, c), "value": round(v),
+                "pct": round(100 * v / a["value"])}
+               for c, v in sorted(a["by_cat"].items(), key=lambda kv: -kv[1])]
+        rows.append({"account": name, "value": round(a["value"]),
+                     "pct": round(100 * a["value"] / total, 1), "mix": mix})
+    rows.sort(key=lambda r: -r["value"])
+    return {"accounts": rows, "total": round(total), "confidence": "medium"}
+
+
 def ranked_risks(snap: dict, alloc: dict) -> dict:
     risks = []
     props = {p["name"]: p for p in snap.get("properties", [])}
@@ -348,6 +388,7 @@ def dashboard(family_id: str) -> dict:
     lr = liquidity_runway(snap)
     cf = cash_flow(snap)
     al = allocation(snap, target, holdings, fx)
+    aa = account_allocation(snap, holdings, fx)
     rk = ranked_risks(snap, al)
     return {
         "family_id": family_id,
@@ -359,6 +400,7 @@ def dashboard(family_id: str) -> dict:
         "liquidity": lr,
         "cash_flow": cf,
         "allocation": al,
+        "by_account": aa,
         "risks": rk,
     }
 
