@@ -147,22 +147,26 @@ def cash_flow(snap: dict) -> dict:
     }
 
 
-def allocation(snap: dict, target: dict, holdings: list = None) -> dict:
+def allocation(snap: dict, target: dict, holdings: list = None, fx_usd_cad: float = 1.0) -> dict:
     accounts = snap.get("accounts", [])
     props = snap.get("properties", [])
     holdings = holdings or []
 
     by_cat: dict[str, float] = {}
-    # Real estate at equity.
-    re_equity = sum((p.get("value") or 0) - (p.get("mortgage") or 0) for p in props)
+    # Real estate at BOOK equity (purchase price − current mortgage).
+    re_equity = sum(((p.get("purchase_price") or p.get("value") or 0) - (p.get("mortgage") or 0))
+                    for p in props)
     if props:
         by_cat["real_estate"] = re_equity
 
     if holdings:
-        # Use categorized brokerage holdings (book) + cash accounts (chequing).
+        # Categorized brokerage holdings (book, USD→CAD) + cash accounts (chequing).
         for h in holdings:
             cat = h.get("category", "equities_uncat")
-            by_cat[cat] = by_cat.get(cat, 0) + (h.get("book") or 0)
+            book = (h.get("book") or 0)
+            if h.get("currency") == "USD":
+                book *= fx_usd_cad
+            by_cat[cat] = by_cat.get(cat, 0) + book
         for a in accounts:
             if a.get("asset_class") == "cash_tbill":  # chequing, not brokerage
                 by_cat["cash_tbill"] = by_cat.get("cash_tbill", 0) + (a.get("value") or 0)
@@ -212,12 +216,14 @@ def allocation(snap: dict, target: dict, holdings: list = None) -> dict:
 
     if holdings:
         flags = [
-            "Securities valued at BOOK (cost); market is ~20% higher (esp. RRSP/TFSA).",
+            f"USD accounts (TFSA, RRSP) converted to CAD at {fx_usd_cad}.",
+            "All asset tiers at BOOK: securities at cost; real estate at purchase-price equity.",
+            "Book real-estate equity treats the condo at its $799k purchase (it's underwater "
+            "at market — see Risks).",
             "RRSP holdings may be partial (book seen ~$105k vs stated $154k).",
-            "Categories for obscure leveraged ETFs are best-guess — confirm.",
         ]
-        notes = ("Real estate at equity; securities at book cost. Allocation is of the net "
-                 "asset base across all accounts + chequing.")
+        notes = ("Book basis throughout (per your setting). Real estate = purchase price − "
+                 "mortgage. Allocation is of the net asset base across all accounts + chequing.")
         conf = "medium"
     else:
         flags = [
@@ -337,10 +343,11 @@ def dashboard(family_id: str) -> dict:
     if not snap:
         return {"family_id": family_id, "family_name": fam.get("name"), "has_data": False}
 
+    fx = config.load_app_config().get("fx_usd_cad", 1.0)
     nw = net_worth(snap)
     lr = liquidity_runway(snap)
     cf = cash_flow(snap)
-    al = allocation(snap, target, holdings)
+    al = allocation(snap, target, holdings, fx)
     rk = ranked_risks(snap, al)
     return {
         "family_id": family_id,
