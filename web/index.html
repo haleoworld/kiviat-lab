@@ -56,7 +56,7 @@ function metricCard(label, big, sub, conf){
 }
 
 async function loadFamilies(){
-  const r = await fetch('/api/families'); const d = await r.json();
+  const r = await fetch('api/families'); const d = await r.json();
   const sel = document.getElementById('familySel');
   sel.innerHTML = d.families.map(f=>`<option value="${f.id}" ${f.active?'selected':''}>${f.name}</option>`).join('');
   sel.onchange = ()=>loadDashboard(sel.value);
@@ -64,7 +64,7 @@ async function loadFamilies(){
 }
 
 async function loadDashboard(family){
-  const r = await fetch('/api/dashboard'+(family?`?family=${encodeURIComponent(family)}`:''));
+  const r = await fetch('api/dashboard'+(family?`?family=${encodeURIComponent(family)}`:''));
   const d = await r.json();
   document.getElementById('meta').textContent =
     `${d.family_name} · as of ${d.as_of||'—'} · ${d.currency||''}`;

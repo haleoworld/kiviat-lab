@@ -21,7 +21,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 import config
 import paths
@@ -32,11 +32,23 @@ if paths.ENV_FILE.exists():
     load_dotenv(paths.ENV_FILE)
 PASSCODE = os.environ.get("KIVIAT_PASSCODE") or os.environ.get("KIVIAT_PASSWORD")
 
+# When served under a subpath by a stripping proxy (e.g. Tailscale serve --set-path
+# /kaviat-lab), the app RECEIVES paths at root but must EMIT links/redirects with the
+# prefix. BASE is that outgoing prefix (no trailing slash); "" means served at root.
+BASE = os.environ.get("KIVIAT_BASE_PATH", "").rstrip("/")
+
 COOKIE = "kiviat_session"
 MONTH = 60 * 60 * 24 * 30
 
 app = FastAPI(title="Kiviat Lab")
 WEB_DIR = paths.CODE_ROOT / "web"
+
+
+def serve_html(filename: str) -> HTMLResponse:
+    """Serve an HTML file with a <base href> so its relative URLs resolve under BASE."""
+    html = (WEB_DIR / filename).read_text()
+    html = html.replace("<head>", f'<head>\n  <base href="{BASE}/">', 1)
+    return HTMLResponse(html)
 
 
 def _session_token() -> str:
@@ -61,23 +73,23 @@ def require_api_auth(request: Request):
 
 @app.get("/login")
 def login_page():
-    return FileResponse(WEB_DIR / "login.html")
+    return serve_html("login.html")
 
 
 @app.post("/login")
 def login(passcode: str = Form(...)):
     if PASSCODE and secrets.compare_digest(passcode, PASSCODE):
-        resp = RedirectResponse("/", status_code=303)
+        resp = RedirectResponse(f"{BASE}/", status_code=303)
         resp.set_cookie(COOKIE, _session_token(), httponly=True, samesite="lax",
-                        max_age=MONTH)
+                        max_age=MONTH, path=f"{BASE}/")
         return resp
-    return RedirectResponse("/login?error=1", status_code=303)
+    return RedirectResponse(f"{BASE}/login?error=1", status_code=303)
 
 
 @app.get("/logout")
 def logout():
-    resp = RedirectResponse("/login", status_code=303)
-    resp.delete_cookie(COOKIE)
+    resp = RedirectResponse(f"{BASE}/login", status_code=303)
+    resp.delete_cookie(COOKIE, path=f"{BASE}/")
     return resp
 
 
@@ -86,8 +98,8 @@ def logout():
 @app.get("/")
 def index(request: Request):
     if not is_authed(request):
-        return RedirectResponse("/login", status_code=303)
-    return FileResponse(WEB_DIR / "index.html")
+        return RedirectResponse(f"{BASE}/login", status_code=303)
+    return serve_html("index.html")
 
 
 @app.get("/api/families")
