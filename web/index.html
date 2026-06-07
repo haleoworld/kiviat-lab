@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <!-- Header -->
+    <header class="flex items-center justify-between gap-3 mb-5">
+      <div class="min-w-0">
+        <h1 class="text-2xl font-bold tracking-tight">Kiviat&nbsp;Lab</h1>
+        <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+      </div>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[45%] truncate"></select>
+    </header>
+
+    <div id="content" class="space-y-5"></div>
+
+    <footer class="mt-8 text-[11px] leading-relaxed text-neutral-600">
+      Numbers are computed live from your snapshot. Confidence flags reflect input quality —
+      🟢 high · 🟡 medium · 🔴 low. This makes you <em>informed, not advised</em>; validate
+      big moves with a fee-only advisor and a CPA.
+    </footer>
+  </div>
+
+<script>
+const CUR = (n) => (n<0?"-":"") + "$" + Math.abs(Math.round(n)).toLocaleString();
+const CONF = { high:["🟢","text-emerald-400"], medium:["🟡","text-amber-400"], low:["🔴","text-rose-400"] };
+const STATUS_COLOR = { over:"text-rose-400", under:"text-amber-400", missing:"text-rose-400", ok:"text-emerald-400" };
+const SEV = { high:"bg-rose-500/15 text-rose-300 border-rose-500/30",
+              medium:"bg-amber-500/15 text-amber-300 border-amber-500/30",
+              low:"bg-neutral-500/15 text-neutral-300 border-neutral-500/30" };
+let chart;
+
+function confBadge(c){ const [e,cls]=CONF[c]||CONF.low; return `<span class="pill px-2 py-0.5 text-[11px] ${cls}">${e} ${c}</span>`; }
+
+function metricCard(label, big, sub, conf){
+  return `<div class="card p-4 min-w-0 overflow-hidden">
+    <div class="flex items-start justify-between gap-2">
+      <span class="text-sm text-neutral-400 min-w-0 truncate">${label}</span>${confBadge(conf)}
+    </div>
+    <div class="num text-2xl sm:text-3xl font-bold mt-2 break-words">${big}</div>
+    <div class="text-xs text-neutral-500 mt-1 break-words">${sub}</div>
+  </div>`;
+}
+
+async function loadFamilies(){
+  const r = await fetch('/api/families'); const d = await r.json();
+  const sel = document.getElementById('familySel');
+  sel.innerHTML = d.families.map(f=>`<option value="${f.id}" ${f.active?'selected':''}>${f.name}</option>`).join('');
+  sel.onchange = ()=>loadDashboard(sel.value);
+  loadDashboard(sel.value || d.active);
+}
+
+async function loadDashboard(family){
+  const r = await fetch('/api/dashboard'+(family?`?family=${encodeURIComponent(family)}`:''));
+  const d = await r.json();
+  document.getElementById('meta').textContent =
+    `${d.family_name} · as of ${d.as_of||'—'} · ${d.currency||''}`;
+  const c = document.getElementById('content');
+  if(!d.has_data){ c.innerHTML = `<div class="card p-6 text-neutral-400">No snapshot yet for this family.</div>`; return; }
+
+  const nw=d.net_worth, lr=d.liquidity, cf=d.cash_flow, al=d.allocation, rk=d.risks;
+
+  // Hero metric cards
+  const hero = `<div class="grid grid-cols-2 gap-3">
+    ${metricCard("Net worth", CUR(nw.value),
+       `${CUR(nw.gross_assets)} assets − ${CUR(nw.liabilities)} debt`, nw.confidence)}
+    ${metricCard("Liquid runway", (lr.liquid_runway_months??'—')+" mo",
+       `if income stops · ${CUR(lr.liquid)} liquid`, lr.confidence)}
+    ${metricCard("Stressed runway", (lr.stressed_runway_months??'—')+" mo",
+       `1 income lost + market −40%`, "low")}
+    ${metricCard("Personal cash flow", CUR(cf.personal_net_now)+"/mo",
+       `→ ${CUR(cf.personal_net_renewal)}/mo post-renewal`, cf.confidence)}
+  </div>`;
+
+  // Cash flow detail
+  const cfCard = `<div class="card p-4">
+    <div class="flex items-center justify-between"><h2 class="font-semibold">Cash flow</h2>${confBadge(cf.confidence)}</div>
+    <div class="grid grid-cols-3 gap-2 mt-3 text-center">
+      <div class="min-w-0"><div class="text-xs text-neutral-500">In</div><div class="num text-lg font-semibold text-emerald-400 break-words">${CUR(cf.personal_in)}</div></div>
+      <div class="min-w-0"><div class="text-xs text-neutral-500">Out (now)</div><div class="num text-lg font-semibold text-rose-400 break-words">${CUR(cf.personal_out_now)}</div></div>
+      <div class="min-w-0"><div class="text-xs text-neutral-500">Net</div><div class="num text-lg font-semibold break-words ${cf.personal_net_now<0?'text-rose-400':'text-emerald-400'}">${CUR(cf.personal_net_now)}</div></div>
+    </div>
+    <p class="text-xs text-neutral-500 mt-3">${cf.notes}</p>
+    <div class="pill inline-block px-3 py-1 text-xs mt-3 text-emerald-300">Household incl. corp: ${CUR(cf.household_net_year_now)}/yr</div>
+  </div>`;
+
+  // Allocation
+  const rows = al.rows.map(r=>{
+    const col = STATUS_COLOR[r.status]||'text-neutral-400';
+    const tag = r.status==='ok'?'on target':(r.status==='missing'?'missing':(r.drift_pp>0?`+${r.drift_pp}pp`:`${r.drift_pp}pp`));
+    return `<div class="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-800 last:border-0">
+      <span class="text-sm min-w-0 truncate">${r.label}</span>
+      <span class="num text-sm shrink-0 whitespace-nowrap"><span class="text-neutral-200">${r.actual_pct}%</span>
+        <span class="text-neutral-600"> / ${r.target_pct}%</span>
+        <span class="${col} ml-2">${tag}</span></span></div>`;
+  }).join('');
+  const alCard = `<div class="card p-4">
+    <div class="flex items-center justify-between"><h2 class="font-semibold">Allocation vs target</h2>${confBadge(al.confidence)}</div>
+    <div class="flex flex-col sm:flex-row gap-4 mt-3 items-center">
+      <div class="w-40 h-40 shrink-0"><canvas id="allocChart"></canvas></div>
+      <div class="flex-1 w-full">${rows}</div>
+    </div>
+    <div class="mt-3 flex items-center gap-2 text-sm">
+      <span class="text-neutral-500">Risk score</span>
+      <span class="num font-semibold">${al.risk_score}</span>
+      <span class="text-neutral-600">vs target ${al.target_risk_score}</span>
+      <span class="pill px-2 py-0.5 text-[11px] ${al.risk_vs_target==='above'?'text-rose-400':'text-emerald-400'}">${al.risk_vs_target} intended risk</span>
+    </div>
+    <p class="text-xs text-neutral-500 mt-2">${al.notes}</p>
+    ${(al.missing_data_flags||[]).map(f=>`<p class="text-[11px] text-amber-400/80 mt-1">⚠ ${f}</p>`).join('')}
+  </div>`;
+
+  // Risks
+  const risks = rk.risks.map((x,i)=>`<div class="card p-4">
+    <div class="flex items-start justify-between gap-2">
+      <h3 class="font-medium text-sm min-w-0">${i+1}. ${x.title}</h3>
+      <span class="px-2 py-0.5 text-[11px] rounded-full border shrink-0 ${SEV[x.severity]||SEV.low}">${x.severity}</span>
+    </div>
+    <p class="text-xs text-neutral-400 mt-1.5 leading-relaxed">${x.detail}</p>
+  </div>`).join('');
+  const rkSection = `<div><div class="flex items-center justify-between mb-2 mt-1">
+      <h2 class="font-semibold">Top risks</h2>${confBadge(rk.confidence)}</div>
+      <div class="space-y-3">${risks}</div></div>`;
+
+  c.innerHTML = hero + cfCard + alCard + rkSection;
+
+  // Donut of actual allocation (value>0 only)
+  const live = al.rows.filter(r=>r.actual_value>0);
+  if(chart) chart.destroy();
+  chart = new Chart(document.getElementById('allocChart'), {
+    type:'doughnut',
+    data:{ labels: live.map(r=>r.label),
+      datasets:[{ data: live.map(r=>r.actual_value),
+        backgroundColor:['#60a5fa','#34d399','#fbbf24','#f472b6','#a78bfa','#f87171','#22d3ee'],
+        borderColor:'#0a0a0b', borderWidth:2 }] },
+    options:{ plugins:{legend:{display:false}}, cutout:'62%', responsive:true, maintainAspectRatio:true }
+  });
+}
+
+loadFamilies();
+</script>
+</body>
+</html>
