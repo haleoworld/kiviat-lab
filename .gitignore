@@ -1,0 +1,13 @@
+# ---- PRIVATE DATA — never commit ----
+# All family financial data, the API key, configs, statements.
+data/
+
+# Secrets (also covered by data/, but belt-and-suspenders)
+.env
+**/.env
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
