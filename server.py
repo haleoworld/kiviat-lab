@@ -1,62 +1,97 @@
 #!/usr/bin/env python3
-"""Kiviat Lab web server (Phase 3, first pass).
+"""Kiviat Lab web server (Phase 3).
 
-Serves a phone-friendly dashboard + a small JSON API over the computed views.
+Serves a phone-friendly dashboard + a small JSON API over the computed views,
+behind a passcode login page (session cookie).
 
     python server.py            # http://localhost:8000
-    python server.py --host 0.0.0.0 --port 8000   # reachable over Tailscale/LAN
+    python server.py --host 0.0.0.0 --port 8000   # reachable over Tailscale
 
-Read-only for now: it renders the family's snapshot-derived metrics. Upload /
-review / commit come later.
+Set the passcode in the data-root .env as KIVIAT_PASSCODE (or KIVIAT_PASSWORD).
+The server refuses to bind beyond localhost unless a passcode is set.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import os
 import secrets
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 import config
 import paths
 import views
 
-# Load secrets from the data-root .env (KIVIAT_PASSWORD gates remote access).
+# Load the passcode from the data-root .env.
 if paths.ENV_FILE.exists():
     load_dotenv(paths.ENV_FILE)
-PASSWORD = os.environ.get("KIVIAT_PASSWORD")
-USERNAME = os.environ.get("KIVIAT_USER", "family")
+PASSCODE = os.environ.get("KIVIAT_PASSCODE") or os.environ.get("KIVIAT_PASSWORD")
 
-_security = HTTPBasic(auto_error=False)
+COOKIE = "kiviat_session"
+MONTH = 60 * 60 * 24 * 30
 
-
-def require_auth(creds: Optional[HTTPBasicCredentials] = Depends(_security)):
-    """Password gate. If KIVIAT_PASSWORD is unset, the app is open (localhost dev only)."""
-    if not PASSWORD:
-        return
-    ok = creds and secrets.compare_digest(creds.username, USERNAME) \
-        and secrets.compare_digest(creds.password, PASSWORD)
-    if not ok:
-        raise HTTPException(401, "Authentication required",
-                            headers={"WWW-Authenticate": "Basic"})
-
-
-app = FastAPI(title="Kiviat Lab", dependencies=[Depends(require_auth)])
-
+app = FastAPI(title="Kiviat Lab")
 WEB_DIR = paths.CODE_ROOT / "web"
 
 
+def _session_token() -> str:
+    """Stateless cookie value: HMAC keyed by the passcode. Survives restarts;
+    invalidated automatically if the passcode changes."""
+    return hmac.new(PASSCODE.encode(), b"kiviat-session-v1", hashlib.sha256).hexdigest()
+
+
+def is_authed(request: Request) -> bool:
+    if not PASSCODE:
+        return True  # no passcode configured → open (localhost dev only)
+    cookie = request.cookies.get(COOKIE, "")
+    return bool(cookie) and hmac.compare_digest(cookie, _session_token())
+
+
+def require_api_auth(request: Request):
+    if not is_authed(request):
+        raise HTTPException(401, "login required")
+
+
+# ---------- auth pages ----------
+
+@app.get("/login")
+def login_page():
+    return FileResponse(WEB_DIR / "login.html")
+
+
+@app.post("/login")
+def login(passcode: str = Form(...)):
+    if PASSCODE and secrets.compare_digest(passcode, PASSCODE):
+        resp = RedirectResponse("/", status_code=303)
+        resp.set_cookie(COOKIE, _session_token(), httponly=True, samesite="lax",
+                        max_age=MONTH)
+        return resp
+    return RedirectResponse("/login?error=1", status_code=303)
+
+
+@app.get("/logout")
+def logout():
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(COOKIE)
+    return resp
+
+
+# ---------- app ----------
+
 @app.get("/")
-def index():
+def index(request: Request):
+    if not is_authed(request):
+        return RedirectResponse("/login", status_code=303)
     return FileResponse(WEB_DIR / "index.html")
 
 
 @app.get("/api/families")
-def api_families():
+def api_families(request: Request, _: None = Depends(require_api_auth)):
     fams = []
     active = config.load_app_config().get("active_family")
     for fid in paths.list_families():
@@ -66,7 +101,8 @@ def api_families():
 
 
 @app.get("/api/dashboard")
-def api_dashboard(family: Optional[str] = None):
+def api_dashboard(request: Request, family: Optional[str] = None,
+                  _: None = Depends(require_api_auth)):
     fid = config.resolve_family(family)
     if not fid:
         raise HTTPException(404, "no family specified and no active family set")
@@ -78,19 +114,18 @@ def api_dashboard(family: Optional[str] = None):
 def main():
     ap = argparse.ArgumentParser(description="Run the Kiviat Lab web server.")
     ap.add_argument("--host", default="127.0.0.1",
-                    help="127.0.0.1 = this machine only; 0.0.0.0 = reachable over Tailscale/LAN")
+                    help="127.0.0.1 = this machine only; 0.0.0.0 = reachable over Tailscale")
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
 
-    # Refuse to expose beyond localhost without a password set.
-    if args.host != "127.0.0.1" and not PASSWORD:
+    # Refuse to expose beyond localhost without a passcode set.
+    if args.host != "127.0.0.1" and not PASSCODE:
         raise SystemExit(
-            "Refusing to bind to a non-local address with no password.\n"
-            f"  Set KIVIAT_PASSWORD in {paths.ENV_FILE} first, then re-run.\n"
-            "  (This prevents anyone on the network from reading your finances.)"
+            "Refusing to bind to a non-local address with no passcode.\n"
+            f"  Set KIVIAT_PASSCODE in {paths.ENV_FILE} first, then re-run.\n"
+            "  (This prevents anyone on your tailnet from reading your finances.)"
         )
-    if PASSWORD:
-        print(f"🔒 auth ON (user: {USERNAME})")
+    print("🔒 login required" if PASSCODE else "⚠ no passcode set — open (localhost only)")
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port)
 
