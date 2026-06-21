@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Retirement</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; }
+    .fld:focus { outline:none; border-color:#a78bfa; }
+    /* Range slider — themed to match the dark UI + amber/purple accents */
+    input[type=range] { -webkit-appearance:none; appearance:none; height:4px; background:#2e2e32; border-radius:9999px; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; border-radius:50%;
+      background:#fbbf24; border:2px solid #0a0a0b; box-shadow:0 0 0 1px #fbbf24; cursor:pointer; }
+    input[type=range]::-moz-range-thumb { width:18px; height:18px; border-radius:50%; background:#fbbf24; border:2px solid #0a0a0b; cursor:pointer; }
+    .seg { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .seg button.on { background:#2e2e32; color:#fff; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <!-- Header -->
+    <header class="flex items-center justify-between gap-3 mb-5">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Retirement target</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[35vw] truncate"></select>
+    </header>
+
+    <p class="text-xs text-neutral-500 mb-4 leading-relaxed">
+      How much <span class="text-neutral-300">before tax</span> you need so your money lasts —
+      given that it sits in tax-different buckets. Spending and expenses are <em>after-tax</em>;
+      the headline grosses them up. All values shown in <span class="text-neutral-300">today's dollars</span> (real) unless toggled.
+    </p>
+
+    <div id="content" class="space-y-5"><div class="card p-6 text-neutral-400">Loading…</div></div>
+
+    <footer class="mt-8 text-[11px] leading-relaxed text-neutral-600">
+      Estimates in today's dollars (inflation-adjusted). The pre-tax figure grosses up your
+      after-tax spend by a <em>blended</em> withdrawal-tax rate derived from your account mix —
+      not a full tax-bracket calculation. This makes you <em>informed, not advised</em>; validate
+      with a fee-only advisor and a CPA.
+    </footer>
+  </div>
+
+<script>
+const CUR = (n) => (n<0?"-":"") + "$" + Math.abs(Math.round(n)).toLocaleString();
+const COMPACT = (n) => {
+  const a = Math.abs(n);
+  if(a>=1e6) return (n<0?"-":"")+"$"+(a/1e6).toFixed(a>=1e7?0:1)+"M";
+  if(a>=1e3) return (n<0?"-":"")+"$"+Math.round(a/1e3)+"k";
+  return CUR(n);
+};
+let chart, dollarMode = "today";   // "today" (real) | "future" (nominal)
+let markerAge = null;              // retirement age the vertical chart marker draws at
+let DEFAULTS = null, currentFamily = null, saveTimer = null, scenarios = [];   // persistence state
+
+// Flat inline icons (currentColor → inherit button text color).
+const SPARK = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/></svg>';
+const ICON_RESET = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+
+// ---- reactive state (populated from /api/retirement, then user-editable) ----
+const S = {
+  currentAge:40, retireAge:65, deathAge:84,
+  netAssets:0, monthlySavings:0, monthlyExpenses:0,
+  returnPct:7, inflationPct:3, buckets:[],
+};
+
+// ---------- persistence (auto-save per household) ----------
+// Saved file + computed defaults share one snake_case shape; the editable JS
+// state `S` is camelCase. These map between them so both load the same way.
+const KEYMAP = { current_age:"currentAge", retire_age:"retireAge", death_age:"deathAge",
+  net_assets:"netAssets", monthly_savings:"monthlySavings", monthly_expenses:"monthlyExpenses",
+  return_pct:"returnPct", inflation_pct:"inflationPct" };
+
+function applyState(src){
+  if(!src) return;
+  for(const [snake,camel] of Object.entries(KEYMAP)) if(src[snake]!=null) S[camel]=src[snake];
+  if(Array.isArray(src.tax_buckets)) S.buckets = src.tax_buckets.map(b=>({...b}));
+}
+function inputsPayload(){
+  const o={}; for(const [snake,camel] of Object.entries(KEYMAP)) o[snake]=S[camel];
+  o.tax_buckets = S.buckets.map(b=>({...b}));
+  return o;
+}
+function payload(){ return {...inputsPayload(), scenarios}; }
+
+// ---------- saved scenarios (save / load / overwrite / rename / delete) ----------
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// Pre-tax nest-egg headline for a stored (snake-case) input set — the row summary.
+function nestEggOf(inp){
+  const r=(1+(inp.return_pct||0)/100)/(1+(inp.inflation_pct||0)/100)-1;
+  const N=Math.max((inp.death_age||0)-(inp.retire_age||0),0);
+  const afterTax=(inp.monthly_expenses||0)*12;
+  let bal=0,tax=0; (inp.tax_buckets||[]).forEach(b=>{const v=Math.max(b.balance||0,0);bal+=v;tax+=v*((b.rate||0)/100);});
+  const blended=bal>0?tax/bal:0;
+  return pvAnnuity(afterTax/(1-blended), N, r);
+}
+function saveScenario(){
+  const name=(prompt("Name this retirement scenario:", `Scenario ${scenarios.length+1}`)||"").trim();
+  if(!name) return;
+  const snap=inputsPayload();
+  const ex=scenarios.findIndex(s=>s.name===name);
+  if(ex>=0){ if(!confirm(`A scenario named "${name}" exists — overwrite it?`)) return; scenarios[ex].inputs=snap; }
+  else scenarios.push({name, inputs:snap});
+  buildInputs(); recompute(); saveNow();
+}
+function loadScenario(i){ const sc=scenarios[i]; if(!sc) return; applyState(sc.inputs); buildInputs(); recompute(); saveNow(); }
+function overwriteScenario(i){ const sc=scenarios[i]; if(!sc) return;
+  if(!confirm(`Save the current inputs into "${sc.name}" (overwrite it)?`)) return;
+  sc.inputs=inputsPayload(); buildInputs(); recompute(); saveNow(); }
+function renameScenario(i){ const sc=scenarios[i]; if(!sc) return;
+  const name=(prompt("Rename scenario:", sc.name)||"").trim(); if(!name) return;
+  sc.name=name; buildInputs(); recompute(); saveNow(); }
+function delScenario(i){ const sc=scenarios[i]; if(!sc) return;
+  if(!confirm(`Delete scenario "${sc.name}"?`)) return;
+  scenarios.splice(i,1); buildInputs(); recompute(); saveNow(); }
+function scenariosCard(){
+  const rows = scenarios.length ? scenarios.map((sc,i)=>{
+    const inp=sc.inputs||{};
+    return `<div class="flex items-center justify-between gap-2 py-2 border-b border-neutral-800 last:border-0">
+      <div class="min-w-0">
+        <div class="text-sm truncate">${esc(sc.name)}</div>
+        <div class="num text-[11px] text-neutral-500"><span class="text-amber-200">${CUR(nestEggOf(inp))}</span> pre-tax · retire ${inp.retire_age||"?"} · ${CUR(inp.monthly_expenses||0)}/mo</div>
+      </div>
+      <div class="flex flex-col items-end gap-1 shrink-0">
+        <button data-loadsc="${i}" class="pill px-3 py-1 text-xs text-violet-200 hover:text-white">Load</button>
+        <div class="flex items-center gap-2 text-[10px] text-neutral-500">
+          <button data-oversc="${i}" class="hover:text-amber-300">overwrite</button>
+          <button data-rensc="${i}" class="hover:text-violet-300">rename</button>
+          <button data-delsc="${i}" class="hover:text-rose-300">delete</button>
+        </div>
+      </div></div>`;
+  }).join("") : `<p class="text-xs text-neutral-600 py-1">No saved scenarios yet — set your inputs, then tap "Save current".</p>`;
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between mb-1"><h2 class="font-semibold">Saved scenarios</h2>
+      <button id="saveScBtn" class="pill px-3 py-1 text-xs text-emerald-200 hover:text-white">+ Save current</button></div>
+    <p class="text-[11px] text-neutral-500 mb-2">Save retirement scenarios and load any back later.</p>
+    ${rows}
+  </div>`;
+}
+function retireURL(extra){ const q = currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; return "api/retirement"+(extra||"")+q; }
+
+function setSaveStatus(state, msg){
+  const el = document.getElementById("saveStatus"); if(!el) return;
+  const map = {
+    auto:  ["Auto-filled from your data · edits save automatically","text-neutral-500"],
+    saving:["Saving…","text-amber-400"],
+    saved: ["Saved ✓ · synced to this household","text-emerald-400"],
+    error: ["Couldn't save — will retry on next edit","text-rose-400"],
+  };
+  const [t,c] = map[state]||map.auto; el.textContent = msg||t; el.className = `text-[11px] ${c}`;
+}
+
+function scheduleSave(){ setSaveStatus("saving"); clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 700); }
+async function saveNow(){
+  try{ const r = await fetch(retireURL(), {method:"PUT", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify(payload())}); setSaveStatus(r.ok?"saved":"error"); }
+  catch(e){ setSaveStatus("error"); }
+}
+async function resetDefaults(){
+  try{ await fetch(retireURL(), {method:"DELETE"}); }catch(e){}
+  applyState(DEFAULTS); buildInputs(); recompute(); setSaveStatus("auto");
+}
+
+// ---------- AI auto-fill ----------
+async function aiFill(){
+  const btn = document.getElementById("aiBtn"); if(btn){ btn.disabled=true; btn.dataset.busy="1"; }
+  setSaveStatus("saving","Reading your finances with AI…");
+  try{
+    const r = await fetch(retireURL("/ai-fill"), {method:"POST"});
+    if(!r.ok){ const e = await r.json().catch(()=>({})); throw new Error(e.detail||("HTTP "+r.status)); }
+    const d = await r.json();
+    applyState(d);                       // populate inputs from the AI result
+    buildInputs(); recompute();
+    if(d.rationale){
+      const note = document.getElementById("aiNote");
+      if(note){ note.innerHTML = `<span class="text-violet-300">${SPARK} AI:</span> ${d.rationale}`; note.classList.remove("hidden"); }
+    }
+    saveNow();                           // persist the AI-filled values
+  }catch(err){
+    setSaveStatus("error","AI auto-fill failed: "+err.message);
+  }finally{
+    const b = document.getElementById("aiBtn"); if(b){ b.disabled=false; delete b.dataset.busy; }
+  }
+}
+
+// ---------- input control builders ----------
+// A labelled row with a number field (right) and a slider (below), both bound to S[key].
+function control(key, label, sub, opts){
+  const {min, max, step=1, prefix="", suffix=""} = opts;
+  return `<div class="py-2.5 border-b border-neutral-800 last:border-0">
+    <div class="flex items-end justify-between gap-3">
+      <div class="min-w-0">
+        <div class="text-sm text-neutral-200">${label}</div>
+        ${sub?`<div class="text-[11px] text-neutral-500 mt-0.5">${sub}</div>`:""}
+      </div>
+      <div class="fld flex items-center px-2 py-1.5 shrink-0">
+        ${prefix?`<span class="text-neutral-500 text-sm mr-1">${prefix}</span>`:""}
+        <input data-num="${key}" type="text" inputmode="numeric"
+               class="bg-transparent text-right num text-sm w-24 outline-none text-neutral-100" />
+        ${suffix?`<span class="text-neutral-500 text-xs ml-1">${suffix}</span>`:""}
+      </div>
+    </div>
+    <input data-range="${key}" type="range" min="${min}" max="${max}" step="${step}" class="w-full mt-2.5" />
+  </div>`;
+}
+
+// Format the value shown inside a number field (thousands separators for money).
+function fmtField(key){
+  const v = S[key];
+  const money = ["netAssets","monthlySavings","monthlyExpenses"].includes(key);
+  return money ? Math.round(v).toLocaleString() : String(v);
+}
+
+// Wire a control pair to S[key] + recompute on every edit.
+function bind(key){
+  const numEl = document.querySelector(`[data-num="${key}"]`);
+  const rngEl = document.querySelector(`[data-range="${key}"]`);
+  if(!numEl||!rngEl) return;
+  numEl.value = fmtField(key);
+  rngEl.value = S[key];
+  numEl.addEventListener("input", e=>{
+    const v = parseFloat(e.target.value.replace(/[^0-9.\-]/g,""));
+    if(!isNaN(v)){ S[key]=v; rngEl.value=v; recompute(); scheduleSave(); }
+  });
+  numEl.addEventListener("blur", ()=>{ numEl.value = fmtField(key); });
+  rngEl.addEventListener("input", e=>{
+    S[key]=parseFloat(e.target.value); numEl.value=fmtField(key); recompute(); scheduleSave();
+  });
+}
+
+// ---------- the financial model ----------
+function realReturn(){ return (1+S.returnPct/100)/(1+S.inflationPct/100) - 1; }
+
+// Present value of N years of `annual` withdrawals, taken at the START of each year
+// (annuity-due), discounted at the real return. This is the "die-with-zero" capital.
+function pvAnnuity(annual, n, r){
+  if(n<=0) return 0;
+  if(Math.abs(r)<1e-9) return annual*n;
+  return annual * (1 - Math.pow(1+r, -n))/r * (1+r);
+}
+
+// Blended withdrawal-tax rate (%) weighted by each bucket's positive balance.
+function blendedRate(){
+  let bal=0, tax=0;
+  for(const b of S.buckets){ const v=Math.max(b.balance,0); bal+=v; tax+=v*(b.rate/100); }
+  return bal>0 ? 100*tax/bal : 0;
+}
+
+// Project a pre-tax balance from currentAge forward: contribute until `untilAge`,
+// then draw `drawAnnual` (pre-tax) each year. Returns {series:[{age,bal}], ...}.
+function project(untilAge, drawAnnual){
+  const r = realReturn(), series=[];
+  let bal = S.netAssets;
+  const save = S.monthlySavings*12;
+  series.push({age:S.currentAge, bal});
+  for(let age=S.currentAge; age<S.deathAge; age++){
+    // Accumulation: contribute at year-end. Drawdown: spend at the START of the
+    // year, remainder grows (annuity-DUE) — matches pvAnnuity so the "needed"
+    // headline and this simulated path use one consistent convention.
+    if(age < untilAge) bal = bal*(1+r) + save;
+    else               bal = (bal - drawAnnual)*(1+r);
+    series.push({age:age+1, bal});
+  }
+  return series;
+}
+
+// Pre-tax assets you'll actually have at a given age (pure accumulation to then).
+function assetsAtAge(age){
+  const r = realReturn(), y = Math.max(age - S.currentAge, 0), save = S.monthlySavings*12;
+  const grown = S.netAssets*Math.pow(1+r, y);
+  const contrib = Math.abs(r)<1e-9 ? save*y : save*((Math.pow(1+r,y)-1)/r);
+  return grown + contrib;
+}
+
+function compute(){
+  const r = realReturn();
+  const retireYears = Math.max(S.deathAge - S.retireAge, 0);
+  const afterTaxAnnual = S.monthlyExpenses*12;
+  const blended = blendedRate();
+  const preTaxAnnual = afterTaxAnnual / (1 - blended/100);
+
+  const afterTaxNestEgg = pvAnnuity(afterTaxAnnual, retireYears, r);
+  const preTaxNestEgg   = pvAnnuity(preTaxAnnual,   retireYears, r);   // == afterTax / (1-blended)
+
+  const projectedAtRetire = assetsAtAge(S.retireAge);
+  const gap = projectedAtRetire - preTaxNestEgg;
+
+  // Earliest age you could retire: assets-at-age ≥ pre-tax need for the
+  // (shrinking) horizon from that age to death.
+  let canRetireAge = null;
+  for(let age=S.currentAge; age<=S.deathAge; age++){
+    const need = pvAnnuity(preTaxAnnual, Math.max(S.deathAge-age,0), r);
+    if(assetsAtAge(age) >= need){ canRetireAge = age; break; }
+  }
+
+  return {r, retireYears, afterTaxAnnual, preTaxAnnual, blended,
+          afterTaxNestEgg, preTaxNestEgg, projectedAtRetire, gap, canRetireAge};
+}
+
+// ---------- render ----------
+function recompute(){
+  const m = compute();
+  renderHeadline(m);
+  renderChart(m);
+  const br = document.getElementById("blendedRate");
+  if(br) br.textContent = m.blended.toFixed(1)+"%";   // tax DOM built once; just update the number
+}
+
+function headlineCard(m){
+  const feasibleNow = m.canRetireAge!==null && m.canRetireAge<=S.currentAge;
+  const gapPos = m.gap>=0;
+  let feas;
+  if(feasibleNow){
+    feas = `<span class="text-emerald-300">You can retire today.</span> Projected pre-tax assets at ${S.retireAge}
+            (${CUR(m.projectedAtRetire)}) already cover the ${CUR(m.preTaxNestEgg)} target.`;
+  } else if(m.canRetireAge!==null){
+    feas = `On these inputs you reach the target at <span class="text-amber-300">age ${m.canRetireAge}</span>.
+            At ${S.retireAge} you'd be ${gapPos?'<span class="text-emerald-300">ahead by '+CUR(m.gap)+'</span>'
+            :'<span class="text-rose-300">short by '+CUR(-m.gap)+'</span>'}.`;
+  } else {
+    feas = `<span class="text-rose-300">These inputs never reach the target</span> before age ${S.deathAge}
+            — raise savings/return or lower spending.`;
+  }
+  return `<div class="card p-5" style="background:radial-gradient(120% 120% at 0% 0%, #1c1a12 0%, #161618 55%);">
+    <div class="text-xs uppercase tracking-wide text-amber-400/80">Pre-tax nest-egg needed at ${S.retireAge}</div>
+    <div class="num text-4xl font-bold mt-1 text-amber-200">${CUR(m.preTaxNestEgg)}</div>
+    <p class="text-xs text-neutral-400 mt-2 leading-relaxed">
+      To fund <span class="text-neutral-200">${CUR(m.afterTaxAnnual)}/yr after tax</span>
+      (${CUR(S.monthlyExpenses)}/mo) for ${m.retireYears} years, drawing from accounts taxed at a blended
+      <span class="text-neutral-200">${m.blended.toFixed(1)}%</span> on withdrawal.
+    </p>
+    <div class="grid grid-cols-2 gap-3 mt-4">
+      <div class="pill px-3 py-2">
+        <div class="text-[11px] text-neutral-500">After-tax (die-with-zero)</div>
+        <div class="num text-lg font-semibold">${CUR(m.afterTaxNestEgg)}</div>
+      </div>
+      <div class="pill px-3 py-2">
+        <div class="text-[11px] text-neutral-500">Pre-tax draw needed</div>
+        <div class="num text-lg font-semibold">${CUR(m.preTaxAnnual)}/yr</div>
+      </div>
+    </div>
+    <p class="text-xs text-neutral-400 mt-3 leading-relaxed">${feas}</p>
+  </div>`;
+}
+function renderHeadline(m){ document.getElementById("headline").innerHTML = headlineCard(m); }
+
+// Built ONCE per (re)load — not on every recompute — so editing a slider isn't
+// interrupted by its own DOM being replaced mid-drag. recompute() only updates
+// the #blendedRate number.
+function renderTaxRows(){
+  const rows = S.buckets.map((b,i)=>`
+    <div class="py-2 border-b border-neutral-800 last:border-0">
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-sm text-neutral-200 min-w-0 truncate">${b.label}</span>
+        <div class="flex items-center gap-2 shrink-0">
+          <div class="fld flex items-center px-2 py-1"><span class="text-neutral-500 text-xs mr-1">$</span>
+            <input data-bal="${i}" type="text" inputmode="numeric" class="bg-transparent text-right num text-xs w-20 outline-none text-neutral-100" /></div>
+          <div class="fld flex items-center px-2 py-1">
+            <input data-rate="${i}" type="text" inputmode="numeric" class="bg-transparent text-right num text-xs w-9 outline-none text-neutral-100" /><span class="text-neutral-500 text-xs ml-0.5">%</span></div>
+        </div>
+      </div>
+      <input data-raterange="${i}" type="range" min="0" max="50" step="1" class="w-full mt-2" />
+    </div>`).join("");
+  document.getElementById("taxBody").innerHTML = rows +
+    `<div class="flex items-center justify-between mt-3 text-sm">
+       <span class="text-neutral-400">Blended withdrawal-tax rate</span>
+       <span id="blendedRate" class="num font-semibold text-amber-300">0%</span>
+     </div>`;
+  S.buckets.forEach((b,i)=>{
+    const bal=document.querySelector(`[data-bal="${i}"]`), rate=document.querySelector(`[data-rate="${i}"]`), rr=document.querySelector(`[data-raterange="${i}"]`);
+    bal.value=Math.round(b.balance).toLocaleString(); rate.value=b.rate; rr.value=b.rate;
+    bal.addEventListener("input",e=>{ const v=parseFloat(e.target.value.replace(/[^0-9.\-]/g,"")); if(!isNaN(v)){b.balance=v; recompute(); scheduleSave();} });
+    bal.addEventListener("blur",()=>{ bal.value=Math.round(b.balance).toLocaleString(); });
+    const setRate=v=>{ if(!isNaN(v)){ b.rate=Math.max(0,Math.min(50,v)); recompute(); scheduleSave(); } };
+    rate.addEventListener("input",e=>setRate(parseFloat(e.target.value.replace(/[^0-9.\-]/g,""))));
+    rate.addEventListener("blur",()=>{ rate.value=b.rate; });
+    rr.addEventListener("input",e=>setRate(parseFloat(e.target.value)));
+  });
+}
+
+// Vertical "retire" marker drawn over the chart.
+const retireMarker = {
+  id:"retireMarker",
+  afterDatasetsDraw(c){
+    const age = markerAge; if(age==null) return;
+    // Use the actual rendered pixel of that age's data point (ages are contiguous
+    // integers from labels[0]). This is immune to category-scale / tick-downsampling
+    // quirks that broke getPixelForValue/getPixelForTick at some widths.
+    let idx = c.data.labels.indexOf(age);
+    if(idx < 0) idx = Math.round(age - c.data.labels[0]);
+    const pt = c.getDatasetMeta(0).data[idx];
+    if(!pt || pt.x==null || isNaN(pt.x)) return;
+    const x = pt.x;
+    const {top,bottom} = c.chartArea, ctx=c.ctx;
+    ctx.save();
+    ctx.strokeStyle="#fbbf24"; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+    ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x,bottom); ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle="#fbbf24";
+    const label=`Retire · ${age}`; ctx.font="600 11px ui-sans-serif,system-ui";
+    const w=ctx.measureText(label).width+12;
+    ctx.fillRect(Math.min(x, c.chartArea.right-w), top+2, w, 18);
+    ctx.fillStyle="#0a0a0b"; ctx.textBaseline="middle";
+    ctx.fillText(label, Math.min(x, c.chartArea.right-w)+6, top+11);
+    ctx.restore();
+  }
+};
+
+function renderChart(m){
+  const series = project(S.retireAge, m.preTaxAnnual);
+  const toShown = (bal, age)=> dollarMode==="future"
+      ? bal*Math.pow(1+S.inflationPct/100, age-S.currentAge) : bal;
+  const labels = series.map(p=>p.age);
+  const data = series.map(p=>toShown(p.bal, p.age));
+
+  const ctx = document.getElementById("nwChart");
+  const g = ctx.getContext("2d").createLinearGradient(0,0,0,260);
+  g.addColorStop(0,"rgba(167,139,250,0.45)"); g.addColorStop(1,"rgba(167,139,250,0.02)");
+
+  // Subtitle explains the active $ mode.
+  const sub = document.getElementById("chartSub");
+  if(sub) sub.textContent = dollarMode==="future"
+    ? `Future (nominal) dollars — actual balance that year, inflated ${S.inflationPct}%/yr.`
+    : `Today's dollars — every amount in today's purchasing power.`;
+
+  // Per-year detail shown on tap/hover (flows scale with the $ mode).
+  const factor = age => dollarMode==="future" ? Math.pow(1+S.inflationPct/100, age-S.currentAge) : 1;
+  function detailLines(age){
+    if(age < S.retireAge){
+      const y=S.retireAge-age;
+      return [`Saving +${CUR(S.monthlySavings*12*factor(age))}/yr`,
+              `${y} yr${y===1?"":"s"} to retirement`];
+    }
+    if(age < S.deathAge){
+      const y=age-S.retireAge;
+      return [`Drawing −${CUR(m.preTaxAnnual*factor(age))}/yr (pre-tax)`,
+              `After-tax spend ${CUR(S.monthlyExpenses*12*factor(age))}/yr`,
+              y===0?"Retiring this year":`${y} yr${y===1?"":"s"} into retirement`];
+    }
+    return ["End of plan"];
+  }
+
+  markerAge = S.retireAge;   // set before render so the marker draws on first paint
+  if(chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type:"line",
+    data:{ labels, datasets:[{ data, borderColor:"#a78bfa", backgroundColor:g, fill:true,
+            borderWidth:2, pointRadius:0, pointHoverRadius:5, pointHitRadius:24,
+            pointHoverBackgroundColor:"#a78bfa", pointHoverBorderColor:"#fff", pointHoverBorderWidth:2,
+            tension:0.25,
+            segment:{ borderColor: s => s.p1.parsed.y<0 ? "#f87171" : "#a78bfa" } }] },
+    options:{ responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:"index", intersect:false },
+      plugins:{ legend:{display:false},
+        tooltip:{ displayColors:false, padding:10, backgroundColor:"#0f0f11",
+          borderColor:"#2e2e32", borderWidth:1, titleColor:"#fafafa", bodyColor:"#d4d4d8",
+          callbacks:{
+            title:items=>"Age "+items[0].label,
+            label:item=>(dollarMode==="future"?"Net worth (future $): ":"Net worth: ")+CUR(item.parsed.y),
+            afterBody:items=>detailLines(Number(items[0].label)),
+          } } },
+      scales:{
+        x:{ grid:{color:"#1c1c1f"}, ticks:{color:"#71717a", maxTicksLimit:8}, title:{display:true,text:"Age",color:"#52525b",font:{size:11}} },
+        y:{ grid:{color:"#1c1c1f"}, ticks:{color:"#71717a", callback:v=>COMPACT(v)} } } },
+    plugins:[retireMarker]
+  });
+  chart.update();
+
+  // end-of-life balance note
+  const endBal = data[data.length-1];
+  document.getElementById("chartNote").innerHTML = endBal>=0
+    ? `Projected to leave <span class="text-emerald-300 num">${CUR(endBal)}</span> at age ${S.deathAge} on your current plan.`
+    : `Projected to run out before age ${S.deathAge} (short <span class="text-rose-300 num">${CUR(-endBal)}</span>) on your current plan.`;
+}
+
+// ---------- per-section reset to auto-filled ----------
+const SECTIONS = {
+  timeline:    ["current_age","retire_age","death_age"],
+  assets:      ["net_assets","monthly_savings","monthly_expenses"],
+  assumptions: ["return_pct","inflation_pct"],
+  tax:         ["tax_buckets"],
+};
+// A card header with the title and a small "reset this section" button.
+function sectionHead(title, name){
+  return `<div class="flex items-center justify-between gap-2 mb-1">
+    <h2 class="font-semibold min-w-0">${title}</h2>
+    <button data-reset="${name}" title="Reset this section to auto-filled"
+      class="text-[11px] text-neutral-500 hover:text-violet-300 inline-flex items-center gap-1 shrink-0">${ICON_RESET}<span>reset</span></button>
+  </div>`;
+}
+// Restore just one section's fields to the computed defaults, then save.
+function resetSection(name){
+  if(!DEFAULTS) return;
+  const partial = {};
+  (SECTIONS[name]||[]).forEach(k=>{ if(DEFAULTS[k]!=null) partial[k]=DEFAULTS[k]; });
+  applyState(partial);
+  buildInputs(); recompute(); saveNow();
+}
+
+// ---------- page scaffold ----------
+function buildInputs(){
+  const timeline = `<div class="card p-4">
+    ${sectionHead("1 · Timeline","timeline")}
+    ${control("currentAge","Current age","", {min:18,max:80})}
+    ${control("retireAge","Retire at","", {min:S.currentAge,max:85, suffix:"yrs"})}
+    ${control("deathAge","Plan until age","Life expectancy — money should last to here", {min:S.retireAge,max:105, suffix:"yrs"})}
+  </div>`;
+  const assets = `<div class="card p-4">
+    ${sectionHead("2 · Assets &amp; cash flow","assets")}
+    ${control("netAssets","Net assets","Investments, cash, registered, corp, real-estate equity", {min:0,max:3000000,step:5000,prefix:"$"})}
+    ${control("monthlySavings","Saved / invested per month","What you add to the pile now", {min:0,max:40000,step:250,prefix:"$"})}
+    ${control("monthlyExpenses","Retirement spend per month","After-tax, in today's dollars", {min:0,max:60000,step:250,prefix:"$"})}
+  </div>`;
+  const adv = `<div class="card p-4">
+    ${sectionHead("3 · Assumptions","assumptions")}
+    ${control("returnPct","Investment return","Nominal, per year", {min:0,max:15,step:0.1,suffix:"%/yr"})}
+    ${control("inflationPct","Inflation","Per year", {min:0,max:10,step:0.1,suffix:"%/yr"})}
+  </div>`;
+  const tax = `<div class="card p-4">
+    ${sectionHead("4 · How your money is taxed","tax")}
+    <p class="text-[11px] text-neutral-500 mt-1 mb-2">Balance and the % tax owed when you withdraw each bucket.
+      Together they set the blended gross-up. Edit freely.</p>
+    <div id="taxBody"></div>
+  </div>`;
+
+  const chartCard = `<div class="card p-4">
+    <div class="flex items-start justify-between gap-2">
+      <div class="min-w-0">
+        <h2 class="font-semibold">Net worth over time</h2>
+        <p id="chartSub" class="text-[11px] text-neutral-500 mt-0.5"></p>
+      </div>
+      <div class="seg flex text-xs shrink-0">
+        <button data-mode="today" class="px-3 py-1 rounded-full on">Today's $</button>
+        <button data-mode="future" class="px-3 py-1 rounded-full text-neutral-400">Future $</button>
+      </div>
+    </div>
+    <div class="mt-3" style="height:240px"><canvas id="nwChart"></canvas></div>
+    <p id="chartNote" class="text-xs text-neutral-500 mt-2"></p>
+    <p class="text-[11px] text-neutral-600 mt-1">Tap or hover the line for that year's detail.</p>
+  </div>`;
+
+  const bar = `<div class="space-y-2">
+    <div class="flex items-center justify-between gap-2">
+      <button id="aiBtn" class="pill px-3 py-1.5 text-xs font-medium text-violet-200 hover:text-white whitespace-nowrap inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">${SPARK} AI auto-fill</button>
+      <button id="resetBtn" class="pill px-3 py-1.5 text-xs text-neutral-300 hover:text-white whitespace-nowrap inline-flex items-center gap-1.5">${ICON_RESET} Reset all</button>
+    </div>
+    <div id="saveStatus" class="text-[11px] text-neutral-500">…</div>
+    <p id="aiNote" class="hidden text-[11px] text-neutral-400 leading-relaxed card p-3"></p>
+  </div>`;
+
+  document.getElementById("content").innerHTML =
+    bar + `<div id="headline"></div>` + chartCard + timeline + assets + adv + tax + scenariosCard();
+
+  ["currentAge","retireAge","deathAge","netAssets","monthlySavings","monthlyExpenses","returnPct","inflationPct"].forEach(bind);
+  renderTaxRows();
+  document.getElementById("aiBtn").addEventListener("click", aiFill);
+  document.getElementById("resetBtn").addEventListener("click", resetDefaults);
+  const ssb=document.getElementById("saveScBtn"); if(ssb)ssb.onclick=saveScenario;
+  document.querySelectorAll("[data-loadsc]").forEach(b=>b.onclick=()=>loadScenario(+b.dataset.loadsc));
+  document.querySelectorAll("[data-oversc]").forEach(b=>b.onclick=()=>overwriteScenario(+b.dataset.oversc));
+  document.querySelectorAll("[data-rensc]").forEach(b=>b.onclick=()=>renameScenario(+b.dataset.rensc));
+  document.querySelectorAll("[data-delsc]").forEach(b=>b.onclick=()=>delScenario(+b.dataset.delsc));
+  document.querySelectorAll("[data-reset]").forEach(b=>b.addEventListener("click",()=>resetSection(b.dataset.reset)));
+  document.querySelectorAll("[data-mode]").forEach(btn=>btn.addEventListener("click",()=>{
+    dollarMode=btn.dataset.mode;
+    document.querySelectorAll("[data-mode]").forEach(b=>{ b.classList.toggle("on", b===btn); b.classList.toggle("text-neutral-400", b!==btn); });
+    recompute();
+  }));
+}
+
+// ---------- data load ----------
+async function loadFamilies(){
+  const r = await fetch("api/families"); const d = await r.json();
+  const sel = document.getElementById("familySel");
+  sel.innerHTML = d.families.map(f=>`<option value="${f.id}" ${f.active?"selected":""}>${f.name}</option>`).join("");
+  sel.onchange = ()=>loadDefaults(sel.value);
+  loadDefaults(sel.value || d.active);
+}
+
+async function loadDefaults(family){
+  currentFamily = family || null;
+  const r = await fetch(retireURL());
+  const d = await r.json();
+  DEFAULTS = d.defaults || {};
+  const sel = document.getElementById("familySel");
+  const fname = sel.options[sel.selectedIndex]?.text || "";
+  if(!DEFAULTS.has_data){
+    document.getElementById("meta").textContent = `${fname} · no snapshot`;
+    document.getElementById("content").innerHTML =
+      `<div class="card p-6 text-neutral-400">No snapshot yet for this family — nothing to auto-fill.</div>`;
+    return;
+  }
+  applyState(DEFAULTS);                 // computed defaults first…
+  const hasSaved = d.saved && Object.keys(d.saved).length;
+  if(hasSaved) applyState(d.saved);     // …then your saved overrides on top
+  scenarios = (d.saved && Array.isArray(d.saved.scenarios)) ? d.saved.scenarios : [];
+  document.getElementById("meta").textContent =
+    `${fname} · ${hasSaved?"saved inputs":"auto-filled"}${DEFAULTS.as_of?` · data ${DEFAULTS.as_of}`:""} · ${DEFAULTS.currency||"CAD"}`;
+  buildInputs();
+  recompute();
+  setSaveStatus(hasSaved ? "saved" : "auto");
+}
+
+loadFamilies();
+</script>
+</body>
+</html>

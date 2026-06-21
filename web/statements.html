@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Statements</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .fld:focus { outline:none; border-color:#a78bfa; }
+    select.fld option { background:#161618; }
+    .drop { border:1.5px dashed #3a3a40; border-radius:16px; transition:border-color .15s, background .15s; }
+    .drop.drag { border-color:#a78bfa; background:#15131c; }
+    input[type=date] { min-width:0; }
+    input[type=date]::-webkit-date-and-time-value { text-align:left; margin:0; }
+    table { border-collapse:collapse; width:100%; }
+    .tx td { border-top:1px solid #1f1f22; padding:6px 4px; vertical-align:middle; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-5">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Statements</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <span id="counts" class="text-[11px] text-neutral-500 shrink-0"></span>
+    </header>
+
+    <!-- Upload -->
+    <section class="mb-6">
+      <div id="drop" class="drop p-5">
+        <div class="text-neutral-300 text-sm font-medium text-center">Import account transactions</div>
+        <div class="text-[11px] text-neutral-500 mt-1 text-center">CSV, Excel, PDF, or a screenshot of your banking app</div>
+        <div class="flex flex-col sm:flex-row items-stretch gap-2 mt-4">
+          <select id="acct" class="fld px-3 py-2.5 text-sm sm:w-56"></select>
+          <label class="pill px-4 py-2.5 text-sm text-neutral-200 cursor-pointer hover:text-white text-center flex-1">
+            Choose file(s)
+            <input id="pick" type="file" accept=".csv,.xlsx,application/pdf,image/*,.heic" multiple class="hidden" />
+          </label>
+        </div>
+        <div id="uplStatus" class="text-[11px] mt-3 text-neutral-500 text-center"></div>
+      </div>
+    </section>
+
+    <div class="flex items-center justify-between mb-2 gap-2">
+      <div class="flex items-center gap-2 min-w-0">
+        <h2 class="font-semibold shrink-0">Imports <span id="impN" class="text-neutral-500 font-normal"></span></h2>
+        <select id="fyFilter" class="pill px-2.5 py-1 text-[11px] text-neutral-300 outline-none"></select>
+        <select id="recFilter" class="pill px-2.5 py-1 text-[11px] text-neutral-300 outline-none">
+          <option value="all">All txns</option>
+          <option value="unreconciled">Unreconciled</option>
+          <option value="reconciled">Reconciled</option>
+          <option value="no_receipt">No receipt</option>
+        </select>
+      </div>
+      <span id="saveStatus" class="text-[11px] text-neutral-500 shrink-0"></span>
+    </div>
+    <div id="impList" class="space-y-4"></div>
+
+    <footer class="mt-10 text-[11px] leading-relaxed text-neutral-600">
+      Money out is negative; money in is positive. Card payments &amp; account transfers are tagged
+      <span class="text-neutral-400">transfer</span> (not spend). Review &amp; commit each import —
+      committed transactions feed receipt-matching, HST, and the export (coming next).
+    </footer>
+  </div>
+
+<script>
+let imports = [], accounts = [], currentFamily = null, saveTimers = {};
+let fiscalYears = [], fyBounds = {}, fyFilter = "all", recFilter = "all";
+function txnMatchesRec(t){
+  if(recFilter==="unreconciled") return !t.reconciled;
+  if(recFilter==="reconciled")   return !!t.reconciled;
+  if(recFilter==="no_receipt")   return !!t.no_receipt;
+  return true;
+}
+const esc = s => (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+const money = n => { const v=Number(n||0); return (v<0?"-$":"$")+Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); };
+function famQ(){ return currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; }
+
+function setSaveStatus(state){
+  const el=document.getElementById("saveStatus");
+  const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],
+             error:["Couldn't save","text-rose-400"],idle:["","text-neutral-500"]};
+  const [t,c]=map[state]||map.idle; el.textContent=t; el.className=`text-[11px] ${c}`;
+}
+function setUpl(msg, cls){ const el=document.getElementById("uplStatus"); el.textContent=msg||""; el.className=`text-[11px] mt-3 text-center ${cls||"text-neutral-500"}`; }
+
+function reconcileBanner(imp){
+  if(imp.reconciled===true)
+    return `<div class="text-[12px] px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-300">✓ Balanced — opening + transactions = closing (${imp.parsed_count} rows).</div>`;
+  if(imp.reconciled===false)
+    return `<div class="text-[12px] px-3 py-2 rounded-lg bg-amber-500/10 text-amber-300">⚠ Off by ${money(imp.discrepancy)} — a row may be missing or misread. Check before committing.</div>`;
+  // No opening/closing balance (typical screenshot) → fall back to the running-balance chain.
+  if(imp.balance_chain_ok===true)
+    return `<div class="text-[12px] px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-300">✓ Running balances are consistent across all ${imp.parsed_count} rows — no gaps.</div>`;
+  if(imp.balance_chain_ok===false)
+    return `<div class="text-[12px] px-3 py-2 rounded-lg bg-amber-500/10 text-amber-300">⚠ Running balance jumps at ${imp.chain_breaks} point(s) — a row may be missing between them. Check before committing.</div>`;
+  return `<div class="text-[12px] px-3 py-2 rounded-lg bg-neutral-500/10 text-neutral-400">ℹ No balances to auto-check completeness — review the rows carefully.</div>`;
+}
+
+const DIRS = ["expense","income","transfer"];
+function txnRow(t){
+  const amtCls = (+t.amount<0)?"text-rose-300":"text-emerald-300";
+  const dirOpts = DIRS.map(d=>`<option value="${d}" ${t.direction===d?"selected":""}>${d}</option>`).join("");
+  const recCls = t.reconciled?"bg-emerald-500/20 text-emerald-300 border-emerald-500/40":"bg-neutral-700/30 text-neutral-500 border-neutral-700";
+  const nrCls  = t.no_receipt?"bg-sky-500/20 text-sky-300 border-sky-500/40":"bg-neutral-700/30 text-neutral-500 border-neutral-700";
+  return `<tr class="tx" data-row="${t.id}">
+    <td class="w-[96px]"><input data-f="date" data-id="${t.id}" type="date" value="${esc(t.date)}" class="fld w-full px-1.5 py-1 text-[12px]" /></td>
+    <td><input data-f="description" data-id="${t.id}" value="${esc(t.description)}" class="fld w-full px-2 py-1 text-[12px]" /></td>
+    <td class="w-[92px]"><input data-f="amount" data-id="${t.id}" inputmode="decimal" value="${(+t.amount).toFixed(2)}" class="fld w-full px-1.5 py-1 text-[12px] num text-right ${amtCls}" /></td>
+    <td class="w-[80px]"><select data-f="direction" data-id="${t.id}" class="fld w-full px-1 py-1 text-[11px]">${dirOpts}</select></td>
+    <td class="w-[58px]"><div class="flex gap-1 justify-center">
+      <button data-tog="reconciled" data-id="${t.id}" title="Reconciled" class="px-1.5 py-1 rounded border text-[11px] ${recCls}">✓</button>
+      <button data-tog="no_receipt" data-id="${t.id}" title="No receipt needed" class="px-1.5 py-1 rounded border text-[11px] ${nrCls}">∅</button>
+    </div></td>
+  </tr>`;
+}
+
+function importCard(imp){
+  const committed = imp.status==="committed";
+  const allTxns = imp.transactions||[];
+  const txns = allTxns.filter(txnMatchesRec);
+  if(recFilter!=="all" && !txns.length) return "";   // nothing in this import matches the filter
+  const fileLink = `api/business/statements/file/${imp.id}${famQ()}`;
+  const head = `<div class="flex items-center justify-between gap-2">
+      <div class="min-w-0">
+        <div class="font-semibold text-sm truncate">${esc(imp.account)} <span class="text-neutral-500 font-normal">· ${esc(imp.source)}</span></div>
+        <div class="text-[11px] text-neutral-500 truncate"><a href="${fileLink}" target="_blank" class="text-violet-400">${esc(imp.source_file)}</a> · ${recFilter==="all"?`${allTxns.length} txns`:`${txns.length} of ${allTxns.length}`}${imp.duplicates_skipped?` · ${imp.duplicates_skipped} dup skipped`:""}</div>
+      </div>
+      <div class="flex items-center gap-1.5 shrink-0">
+        ${(imp.fiscal_years||[]).map(fy=>`<span class="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-300">FY${fy}</span>`).join("")}
+        ${committed?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300">committed</span>`
+                   :`<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">pending</span>`}
+      </div>
+    </div>
+    ${imp.cross_fy?`<div class="text-[11px] text-amber-400/90 mt-2">⚠ This import spans two fiscal years (${(imp.fiscal_years||[]).map(f=>"FY"+f).join(" & ")}) — its transactions will be booked to separate years.</div>`:""}`;
+  const table = txns.length ? `<div class="mt-3 overflow-x-auto"><table>
+      <thead><tr class="text-[10px] text-neutral-500 text-left"><th>Date</th><th>Description</th><th class="text-right">Amount</th><th>Type</th><th class="text-center">✓ / ∅</th></tr></thead>
+      <tbody>${txns.map(txnRow).join("")}</tbody></table></div>` : `<div class="text-[12px] text-neutral-500 mt-3">No transactions parsed.</div>`;
+  const actions = committed
+    ? `<button data-imp="${imp.id}" data-act="delete" class="text-[12px] text-rose-400/80 hover:text-rose-300 px-2">Delete import</button>`
+    : `<button data-imp="${imp.id}" data-act="commit" class="px-3 py-1.5 text-[12px] rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">✓ Commit ${txns.length}</button>
+       <button data-imp="${imp.id}" data-act="reject" class="pill px-3 py-1.5 text-[12px] text-neutral-300">Reject</button>
+       <button data-imp="${imp.id}" data-act="delete" class="text-[12px] text-rose-400/80 hover:text-rose-300 px-2">Delete</button>`;
+  return `<div class="card p-4" data-card="${imp.id}">
+    ${head}
+    <div class="mt-3">${reconcileBanner(imp)}</div>
+    ${table}
+    <div class="flex items-center gap-2 mt-3">${actions}</div>
+  </div>`;
+}
+
+function visibleImports(){
+  if(fyFilter==="all") return imports;
+  const fy=+fyFilter;
+  return imports.filter(i=>(i.fiscal_years||[]).includes(fy));
+}
+function render(){
+  const pend = imports.filter(i=>i.status!=="committed").length;
+  document.getElementById("impN").textContent = imports.length?`· ${pend} pending`:"";
+  const shown = visibleImports();
+  const txShown = shown.reduce((a,i)=>a+(i.transactions||[]).filter(txnMatchesRec).length,0);
+  document.getElementById("counts").textContent = `${shown.length} imports · ${txShown} txns`;
+  const cards = shown.map(importCard).join("");
+  document.getElementById("impList").innerHTML = imports.length
+    ? (cards || `<div class="card p-5 text-sm text-neutral-400">No transactions match ${recFilter==="all"?(fyFilter==="all"?"this view":"FY"+fyFilter):"this filter"}.</div>`)
+    : `<div class="card p-5 text-sm text-neutral-400">No imports yet. Pick an account and upload a statement above.</div>`;
+  wire();
+}
+function renderFyFilter(){
+  const sel=document.getElementById("fyFilter");
+  sel.innerHTML = `<option value="all">All years</option>`+
+    fiscalYears.map(fy=>`<option value="${fy}" ${String(fy)===fyFilter?"selected":""}>FY${fy}</option>`).join("");
+  sel.style.display = fiscalYears.length>1 ? "" : "none";   // only useful with >1 year
+  sel.onchange=()=>{ fyFilter=sel.value; render(); };
+}
+
+function wire(){
+  document.querySelectorAll("[data-f]").forEach(el=>{
+    const ev = (el.tagName==="SELECT"||el.type==="date")?"change":"input";
+    el.addEventListener(ev, ()=>{
+      const id=el.dataset.id, key=el.dataset.f;
+      const t = imports.flatMap(i=>i.transactions||[]).find(x=>x.id===id);
+      if(!t) return;
+      t[key] = (key==="amount") ? (parseFloat(String(el.value).replace(/[, ]/g,""))||0) : el.value;
+      scheduleSave(id, key);
+    });
+  });
+  document.querySelectorAll("[data-act]").forEach(b=>{
+    b.addEventListener("click", ()=>doImport(b.dataset.act, b.dataset.imp));
+  });
+  document.querySelectorAll("[data-tog]").forEach(b=>{
+    b.addEventListener("click", ()=>{
+      const id=b.dataset.id, key=b.dataset.tog;
+      const t = imports.flatMap(i=>i.transactions||[]).find(x=>x.id===id);
+      if(!t) return;
+      t[key] = !t[key];
+      setSaveStatus("saving");
+      fetch(`api/business/statements/txn/${id}${famQ()}`,{method:"PUT",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({[key]:t[key]})})
+        .then(r=>setSaveStatus(r.ok?"saved":"error")).catch(()=>setSaveStatus("error"));
+      render();   // re-apply the state filter + refresh the toggle visuals
+    });
+  });
+}
+
+function scheduleSave(id){ setSaveStatus("saving"); clearTimeout(saveTimers[id]); saveTimers[id]=setTimeout(()=>saveTxn(id), 700); }
+async function saveTxn(id){
+  const t = imports.flatMap(i=>i.transactions||[]).find(x=>x.id===id); if(!t) return;
+  try{
+    const r=await fetch(`api/business/statements/txn/${id}${famQ()}`,{method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({date:t.date,description:t.description,amount:t.amount,direction:t.direction})});
+    if(!r.ok) throw 0; setSaveStatus("saved");
+  }catch(e){ setSaveStatus("error"); }
+}
+
+async function doImport(act, impId){
+  if(act==="delete" && !confirm("Delete this import, its transactions, and the stored file?")) return;
+  if(act==="reject" && !confirm("Reject this import? Its transactions will be discarded.")) return;
+  try{
+    const r=await fetch(`api/business/statements/import/${impId}/${act}${famQ()}`,{method:"POST"});
+    if(!r.ok) throw 0;
+    if(act==="delete"||act==="reject") imports=imports.filter(i=>i.id!==impId);
+    else { const imp=imports.find(i=>i.id===impId); if(imp) imp.status="committed"; }
+    render(); setSaveStatus("saved");
+  }catch(e){ setSaveStatus("error"); }
+}
+
+async function upload(fileList){
+  const files=[...(fileList||[])];
+  const account=document.getElementById("acct").value;
+  if(!files.length) return;
+  if(!account){ setUpl("Pick an account first.", "text-rose-400"); return; }
+  const fd=new FormData(); fd.append("account", account); files.forEach(f=>fd.append("files", f));
+  setUpl(`Reading ${files.length} file${files.length>1?"s":""} for ${account}…`, "text-amber-400");
+  try{
+    const r=await fetch(`api/business/statements/import${famQ()}`,{method:"POST",body:fd});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||("HTTP "+r.status));
+    const got=d.imports||[], errs=d.errors||[];
+    got.forEach(imp=>{
+      imports.unshift(imp);
+      (imp.fiscal_years||[]).forEach(fy=>{ if(!fiscalYears.includes(fy)) fiscalYears.push(fy); });
+    });
+    fiscalYears.sort((a,b)=>b-a); renderFyFilter(); render();
+    const totTx=got.reduce((a,i)=>a+(i.parsed_count||0),0);
+    const offN=got.filter(i=>i.reconciled===false).length;
+    const parts=[`Imported ${got.length} statement${got.length===1?"":"s"} (${totTx} txns)`];
+    if(offN) parts.push(`${offN} need a balance check`);
+    if(errs.length) parts.push(`${errs.length} failed: ${errs.map(e=>e.error).join("; ")}`);
+    setUpl(parts.join(" · ")+(got.length?". Review below.":""), errs.length||offN?"text-amber-400":"text-emerald-400");
+  }catch(e){ setUpl("Import failed: "+e.message, "text-rose-400"); }
+}
+
+document.getElementById("recFilter").addEventListener("change", e=>{ recFilter=e.target.value; render(); });
+document.getElementById("pick").addEventListener("change", e=>{ upload(e.target.files); e.target.value=""; });
+const drop=document.getElementById("drop");
+["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("drag");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("drag");}));
+drop.addEventListener("drop", e=>{ if(e.dataTransfer.files.length) upload(e.dataTransfer.files); });
+
+async function load(){
+  try{
+    const fr=await fetch("api/families"); const fd=await fr.json();
+    const fam=(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
+    currentFamily = fam?fam.id:null;
+    const r=await fetch(`api/business/statements${famQ()}`); const d=await r.json();
+    imports=d.imports||[]; accounts=d.accounts||[]; fiscalYears=d.fiscal_years||[]; fyBounds=d.fiscal_year_bounds||{};
+    document.getElementById("acct").innerHTML =
+      `<option value="">Select account…</option>`+accounts.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join("");
+    document.getElementById("meta").textContent = `${fam?fam.name:"household"} · ${accounts.length} accounts`;
+    renderFyFilter(); render(); setSaveStatus("idle");
+  }catch(e){ document.getElementById("meta").textContent="Couldn't load."; }
+}
+load();
+</script>
+</body>
+</html>

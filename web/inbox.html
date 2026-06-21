@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Inbox</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .bar { height:6px; border-radius:9999px; background:#26262b; overflow:hidden; }
+    .bar > span { display:block; height:100%; }
+    .focus-job { box-shadow:0 0 0 2px #a78bfa; border-color:#a78bfa; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-5">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Inbox</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">batches shared from your phone</p>
+        </div>
+      </div>
+      <span id="live" class="text-[11px] text-neutral-500 shrink-0"></span>
+    </header>
+
+    <div id="list" class="space-y-3"></div>
+
+    <footer class="mt-10 text-[11px] leading-relaxed text-neutral-600">
+      Share receipts or statements from Photos / Files via the <span class="text-neutral-400">Send to Kiviat</span>
+      shortcut. Each batch shows here as it's parsed; done items land in Receipts or Statements to review &amp; commit.
+    </footer>
+  </div>
+
+<script>
+let currentFamily=null, timer=null;
+const focusJob = new URLSearchParams(location.search).get('job');   // deep-link target from Shortcut
+let scrolledFocus=false;
+const esc = s => (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+function famQ(){ return currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; }
+function ago(iso){
+  if(!iso) return "";
+  const d=new Date(iso), s=Math.max(0,(Date.now()-d)/1000);
+  if(s<60) return "just now"; if(s<3600) return Math.floor(s/60)+"m ago";
+  if(s<86400) return Math.floor(s/3600)+"h ago"; return d.toLocaleDateString();
+}
+const STAT = {
+  queued:["queued","text-neutral-400 bg-neutral-500/10"],
+  processing:["processing…","text-amber-300 bg-amber-500/10"],
+  done:["done","text-emerald-300 bg-emerald-500/10"],
+  failed:["failed","text-rose-300 bg-rose-500/10"],
+};
+function reviewHref(kind){ return kind==="receipt"?"business":"statements"; }
+
+function jobCard(j){
+  const items=j.items||[];
+  const done=items.filter(i=>i.status==="done").length;
+  const failed=items.filter(i=>i.status==="failed").length;
+  const proc=items.filter(i=>i.status==="processing").length;
+  const queued=items.filter(i=>i.status==="queued").length;
+  const total=items.length, active=proc+queued>0;
+  const pct=total?Math.round((done+failed)/total*100):0;
+  const barColor = failed?(done?"#f59e0b":"#f43f5e"):"#34d399";
+  const title = j.kind==="statement" ? `Statements · ${esc(j.account||"")}` : "Receipts";
+  const summary = `${done}/${total} done` + (proc?` · ${proc} processing`:"") + (queued?` · ${queued} queued`:"") + (failed?` · ${failed} failed`:"");
+  const rows = items.map(i=>{
+    const [lbl,cls]=STAT[i.status]||STAT.queued;
+    const right = i.status==="done"
+        ? `<a href="${reviewHref(j.kind)}" class="text-violet-400 text-[11px]">review →</a>`
+        : i.status==="failed"
+        ? `<button data-retry="${j.id}:${i.index}" class="text-[11px] text-rose-300 underline">retry</button>`
+        : "";
+    const note = i.status==="failed" ? esc(i.error||"") : esc(i.note||"");
+    return `<div class="flex items-center gap-2 py-1.5 border-t border-neutral-800/70">
+      <span class="text-[10px] px-1.5 py-0.5 rounded ${cls} shrink-0">${lbl}</span>
+      <span class="text-[12px] text-neutral-300 truncate flex-1" title="${esc(i.filename)}">${esc(i.filename)}</span>
+      ${note?`<span class="text-[10px] text-neutral-500 truncate max-w-[40%]">${note}</span>`:""}
+      ${right}
+    </div>`;
+  }).join("");
+  return `<div class="card p-4 ${j.id===focusJob?'focus-job':''}" data-job="${j.id}">
+    <div class="flex items-center justify-between gap-2 mb-2">
+      <div class="min-w-0"><div class="font-semibold text-sm truncate">${title}</div>
+        <div class="text-[11px] text-neutral-500">${ago(j.created_at)} · ${summary}</div></div>
+      ${active?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 shrink-0">working…</span>`:
+        failed?`<span class="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-300 shrink-0">${failed} failed</span>`:
+        `<span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 shrink-0">complete</span>`}
+    </div>
+    <div class="bar mb-2"><span style="width:${pct}%;background:${barColor}"></span></div>
+    <div>${rows}</div>
+  </div>`;
+}
+
+function render(jobs){
+  const el=document.getElementById("list");
+  el.innerHTML = jobs.length ? jobs.map(jobCard).join("")
+    : `<div class="card p-5 text-sm text-neutral-400">Nothing here yet. Share a batch from Photos or Files with the <span class="text-neutral-300">Send to Kiviat</span> shortcut and it'll appear here.</div>`;
+  el.querySelectorAll("[data-retry]").forEach(b=>b.addEventListener("click",()=>{
+    const [jid,idx]=b.dataset.retry.split(":");
+    fetch(`api/inbox/retry/${jid}/${idx}${famQ()}`,{method:"POST"}).then(()=>poll());
+  }));
+  if(focusJob && !scrolledFocus){                       // deep-link: jump to the shared batch
+    const c=el.querySelector(`[data-job="${focusJob}"]`);
+    if(c){ c.scrollIntoView({behavior:"smooth",block:"center"}); scrolledFocus=true; }
+  }
+  const active = jobs.some(j=>(j.items||[]).some(i=>i.status==="processing"||i.status==="queued"));
+  document.getElementById("live").textContent = active?"updating…":"";
+  return active;
+}
+
+async function poll(){
+  try{
+    const r=await fetch(`api/inbox/jobs${famQ()}`); const d=await r.json();
+    const active=render(d.jobs||[]);
+    clearTimeout(timer);
+    timer=setTimeout(poll, active?1500:6000);   // fast while working, slow when idle
+  }catch(e){ clearTimeout(timer); timer=setTimeout(poll, 6000); }
+}
+
+async function init(){
+  try{ const fr=await fetch("api/families"); const fd=await fr.json();
+    const fam=(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
+    currentFamily=fam?fam.id:null;
+  }catch(e){}
+  poll();
+}
+init();
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) poll(); });
+</script>
+</body>
+</html>

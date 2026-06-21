@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — DCA Planner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .fld:focus, .fld:focus-within { outline:none; border-color:#a78bfa; }
+    .mini { width:3.2rem; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-4">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">DCA Planner</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[35vw] truncate"></select>
+    </header>
+
+    <p class="text-xs text-neutral-500 mb-3 leading-relaxed">
+      For each asset class you're <span class="text-neutral-300">underweight</span>, this is how much to
+      contribute each period to slowly reach your target % — assuming you work on one class at a time.
+      Real estate is set aside (you can't DCA it), so percentages are of your <span class="text-neutral-300">liquid</span>
+      base. Pick a class, read its number, contribute. Saves automatically.
+    </p>
+
+    <div class="card p-3 mb-4 flex items-center gap-3 flex-wrap">
+      <span class="text-sm text-neutral-400">Contribute</span>
+      <select id="freqSel" class="fld px-3 py-2 text-sm"></select>
+      <span id="statusDot" class="text-[11px] text-neutral-600 ml-auto">idle</span>
+    </div>
+
+    <div id="content" class="space-y-3"><div class="card p-6 text-neutral-400">Loading…</div></div>
+
+    <footer class="mt-8 text-[11px] leading-relaxed text-neutral-600">
+      Contribution to land one class on target, accounting for self-dilution as the pool grows:
+      <span class="text-neutral-500">C = base × (target − current) ÷ (1 − target)</span>, divided across the
+      periods in your timeframe. Overweight classes can't be reduced by contributing — trim or let new money
+      elsewhere dilute them down. USD-equivalent uses your saved FX rate. "If you start today" — recomputed
+      from live holdings each visit. Informed, not advised.
+    </footer>
+  </div>
+
+<script>
+const money=(n)=> "$"+Math.round(n).toLocaleString();
+const esc=(s)=>String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let currentFamily=null, data=null, saveTimer=null;
+
+function url(){return "api/allocation/dca"+(currentFamily?`?family=${encodeURIComponent(currentFamily)}`:"");}
+function setStatus(s){const e=document.getElementById('statusDot'); e.textContent=s;
+  e.className="text-[11px] ml-auto "+(s==='saved'?'text-emerald-500':s==='saving…'?'text-amber-500':'text-neutral-600');}
+
+async function saveNow(){
+  const body={frequency:document.getElementById('freqSel').value, timeframes:{}};
+  (data.rows||[]).forEach(r=>{ body.timeframes[r.key]=r.months; });
+  setStatus('saving…');
+  try{
+    const r=await fetch(url(),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const d=await r.json(); if(d&&d.rows){ data=d; render(); }
+    setStatus('saved'); setTimeout(()=>setStatus('idle'),1200);
+  }catch(e){ setStatus('error'); }
+}
+function queueSave(){ clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,500); }
+
+function freqWord(){ const f=data.frequency; return ({twice_weekly:"twice a week",weekly:"week",biweekly:"2 weeks",monthly:"month"})[f]||"period"; }
+
+const DURATIONS=[[3,"3 months"],[6,"6 months"],[12,"1 year"],[18,"1.5 years"],[24,"2 years"],[36,"3 years"],[60,"5 years"]];
+function durationOpts(months){
+  const opts=DURATIONS.slice();
+  if(!opts.some(d=>d[0]===months)) opts.push([months, months+" months"]);
+  opts.sort((a,b)=>a[0]-b[0]);
+  return opts.map(([m,l])=>`<option value="${m}" ${m===months?'selected':''}>${l}</option>`).join('');
+}
+
+function rowEl(r){
+  const per=`every ${freqWord()}`;
+  if(r.direction==='add'){
+    return `<div class="card p-4">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="font-semibold text-neutral-100">${esc(r.label)}</div>
+          <div class="text-xs text-neutral-500 num mt-0.5">${r.current_pct}% now → <span class="text-neutral-300">${r.target_pct}% target</span> · gap ${money(r.gap_cad)}</div>
+        </div>
+        <div class="text-right shrink-0">
+          <div class="text-emerald-400 font-bold text-lg num">${money(r.per_period_cad)}</div>
+          <div class="text-[11px] text-neutral-500 num">≈ US$${(r.per_period_usd||0).toLocaleString()} · ${per}</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 mt-3 text-xs text-neutral-400">
+        <span>over</span>
+        <select data-k="${r.key}" class="fld px-2 py-1 text-sm">${durationOpts(r.months)}</select>
+        <span>· ${r.periods} contributions</span>
+      </div>
+    </div>`;
+  }
+  if(r.direction==='trim'){
+    return `<div class="card p-4 opacity-90">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="font-semibold text-neutral-300">${esc(r.label)}</div>
+          <div class="text-xs text-neutral-500 num mt-0.5">${r.current_pct}% now → ${r.target_pct}% target</div>
+        </div>
+        <div class="text-right shrink-0">
+          <div class="text-amber-400 text-sm font-medium">Overweight</div>
+          <div class="text-[11px] text-neutral-500">trim or hold — let other<br>contributions dilute it down</div>
+        </div>
+      </div>
+    </div>`;
+  }
+  return `<div class="card p-4 opacity-60">
+    <div class="flex items-center justify-between gap-3">
+      <div class="font-semibold text-neutral-400">${esc(r.label)}</div>
+      <div class="text-xs text-neutral-500 num">${r.current_pct}% ≈ ${r.target_pct}% · on target</div>
+    </div></div>`;
+}
+
+function render(){
+  const adds=data.rows.filter(r=>r.direction==='add');
+  const others=data.rows.filter(r=>r.direction!=='add');
+  let html='';
+  if(adds.length){ html+=adds.map(rowEl).join(''); }
+  if(others.length){
+    html+=`<div class="text-[10px] uppercase tracking-wider text-neutral-600 pt-3 pb-1 px-1">Already at or above target</div>`;
+    html+=others.map(rowEl).join('');
+  }
+  // real-estate note
+  html+=`<div class="text-[11px] text-neutral-600 px-1 pt-2 num">Real estate ${money(data.real_estate_value)} (${data.real_estate_pct}% of net assets) set aside — illiquid, not part of the DCA mix.</div>`;
+  if(!data.has_targets){
+    html=`<div class="card p-6 text-neutral-400 text-sm">No target allocation saved yet. Set one on the
+      <a href="allocation" class="text-violet-400">Allocation</a> page first.</div>`;
+  }
+  document.getElementById('content').innerHTML=html;
+  document.querySelectorAll('select[data-k]').forEach(sel=>{
+    sel.onchange=()=>{ const r=data.rows.find(x=>x.key===sel.dataset.k); if(r){ r.months=Math.max(1,parseInt(sel.value)||1);} queueSave(); };
+  });
+  const fxTxt=`liquid base ${money(data.base)} · FX ${data.fx_usd_cad} · ${data.confidence} confidence`;
+  document.getElementById('meta').textContent=fxTxt;
+}
+
+function buildFreq(){
+  const sel=document.getElementById('freqSel');
+  const labels=data.freq_labels||{};
+  const order=["twice_weekly","weekly","biweekly","monthly"];
+  sel.innerHTML=order.map(k=>`<option value="${k}" ${k===data.frequency?'selected':''}>${labels[k]||k}</option>`).join('');
+  sel.onchange=()=>{ data.frequency=sel.value; queueSave(); };
+}
+
+async function load(family){
+  currentFamily=family||null;
+  const r=await fetch(url()); data=await r.json();
+  buildFreq(); render(); setStatus('idle');
+}
+async function loadFamilies(){
+  const r=await fetch('api/families'); const d=await r.json();
+  const sel=document.getElementById('familySel');
+  sel.innerHTML=d.families.map(f=>`<option value="${f.id}" ${f.active?'selected':''}>${f.name}</option>`).join('');
+  sel.onchange=()=>load(sel.value); load(sel.value||d.active);
+}
+loadFamilies();
+</script>
+</body>
+</html>

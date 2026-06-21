@@ -1,0 +1,92 @@
+<!-- Shared left navigation drawer. Injected before </body> on every app page by
+     server.serve_html(). Provides window.openNav()/closeNav(), edge-swipe gestures,
+     and active-page highlighting. Single source of truth — edit here only. -->
+<style>
+  #navDrawer{position:fixed;top:0;left:0;bottom:0;width:80vw;max-width:300px;z-index:60;
+    background:#0f0f11;border-right:1px solid #262629;transform:translateX(-100%);
+    transition:transform .25s ease;display:flex;flex-direction:column;
+    padding:max(env(safe-area-inset-top),16px) 0 max(env(safe-area-inset-bottom),16px);
+    overscroll-behavior:contain;}
+  #navDrawer.open{transform:translateX(0);box-shadow:0 0 40px rgba(0,0,0,.6);}
+  #navOverlay{position:fixed;inset:0;z-index:55;background:rgba(0,0,0,.5);opacity:0;
+    pointer-events:none;transition:opacity .25s ease;}
+  #navOverlay.open{opacity:1;pointer-events:auto;}
+  #navDrawer .nh{padding:4px 20px 14px;border-bottom:1px solid #1f1f22;}
+  #navDrawer .nt{font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fafafa;}
+  #navDrawer .ns{font-size:11px;color:#71717a;margin-top:2px;}
+  #navDrawer nav{padding:6px;overflow-y:auto;flex:1;}
+  #navDrawer .grp{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#52525b;padding:14px 12px 6px;}
+  #navDrawer a{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:10px;
+    color:#d4d4d8;font-size:15px;text-decoration:none;}
+  #navDrawer a:active{background:#1a1a1d;}
+  #navDrawer a.active{background:#1c1a24;color:#c4b5fd;}
+  #navDrawer a .ic{width:22px;display:inline-flex;align-items:center;justify-content:center;color:#a1a1aa;}
+  #navDrawer a.active .ic{color:#c4b5fd;}
+  #navDrawer .nf{padding:12px 20px;border-top:1px solid #1f1f22;font-size:11px;color:#52525b;}
+  #navDrawer .nf a{display:inline;padding:0;color:#a78bfa;}
+</style>
+<div id="navOverlay" onclick="closeNav()"></div>
+<aside id="navDrawer" aria-label="Navigation">
+  <div class="nh"><div class="nt">Kiviat&nbsp;Lab</div><div class="ns" id="navFam">household</div></div>
+  <nav>
+    <div class="grp">Overview</div>
+    <a data-p="/" href="./"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg></span> Dashboard</a>
+    <a data-p="/finances" href="finances"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span> Finances</a>
+    <a data-p="/assets" href="assets"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span> Assets</a>
+    <div class="grp">Planning</div>
+    <a data-p="/retirement" href="retirement"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M17 7h4v4"/></svg></span> Retirement</a>
+    <a data-p="/allocation" href="allocation"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.5" fill="currentColor"/></svg></span> Allocation</a>
+    <a data-p="/dca" href="dca"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 7H9.5a2.5 2.5 0 0 0 0 5h5a2.5 2.5 0 0 1 0 5H6"/></svg></span> DCA Planner</a>
+    <div class="grp">Business</div>
+    <a data-p="/inbox" href="inbox"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span> Inbox</a>
+    <a data-p="/business" href="business"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v18l2-1.2L9 21l2-1.2L13 21l2-1.2L17 21l2-1.2V3l-2 1.2L15 3l-2 1.2L11 3 9 4.2 7 3 5 4.2 5 3z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span> Receipts</a>
+    <a data-p="/statements" href="statements"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 14h4M8 17h7"/></svg></span> Statements</a>
+    <a data-p="/coverage" href="coverage"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span> Coverage</a>
+    <div class="grp">Configure</div>
+    <a data-p="/settings" href="settings"><span class="ic"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span> Profile &amp; members</a>
+  </nav>
+  <div class="nf"><a href="logout">Log out</a> · informed, not advised</div>
+</aside>
+<script>
+(function(){
+  const d=document.getElementById('navDrawer'), o=document.getElementById('navOverlay');
+  window.openNav =function(){ d.classList.add('open'); o.classList.add('open'); document.body.style.overflow='hidden'; };
+  window.closeNav=function(){ d.classList.remove('open'); o.classList.remove('open'); document.body.style.overflow=''; };
+  window.toggleNav=function(){ d.classList.contains('open')?closeNav():openNav(); };
+
+  // Highlight the active page (robust to the KIVIAT_BASE_PATH prefix).
+  const p=location.pathname.replace(/\/+$/,'');
+  let active='/';
+  if(p.endsWith('/retirement'))active='/retirement';
+  else if(p.endsWith('/settings'))active='/settings';
+  else if(p.endsWith('/finances'))active='/finances';
+  else if(p.endsWith('/assets'))active='/assets';
+  else if(p.endsWith('/allocation'))active='/allocation';
+  else if(p.endsWith('/dca'))active='/dca';
+  else if(p.endsWith('/business'))active='/business';
+  else if(p.endsWith('/statements'))active='/statements';
+  else if(p.endsWith('/inbox'))active='/inbox';
+  else if(p.endsWith('/coverage'))active='/coverage';
+  d.querySelectorAll('a[data-p]').forEach(a=>{ if(a.dataset.p===active)a.classList.add('active');
+    a.addEventListener('click',closeNav); });
+
+  // Show the active family in the drawer header (best-effort).
+  fetch('api/families').then(r=>r.json()).then(j=>{
+    const f=(j.families||[]).find(x=>x.active)||(j.families||[])[0];
+    if(f) document.getElementById('navFam').textContent=f.name;
+  }).catch(()=>{});
+
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape')closeNav(); });
+
+  // Gestures: swipe right from the left edge opens; swipe left closes.
+  let sx=0,sy=0,track=false,wasOpen=false;
+  document.addEventListener('touchstart',e=>{ const t=e.touches[0]; sx=t.clientX; sy=t.clientY;
+    wasOpen=d.classList.contains('open'); track = wasOpen || sx<28; },{passive:true});
+  document.addEventListener('touchend',e=>{ if(!track)return; track=false;
+    const t=e.changedTouches[0], dx=t.clientX-sx, dy=t.clientY-sy;
+    if(Math.abs(dx)<60 || Math.abs(dy)>Math.abs(dx)) return;   // ignore taps / vertical scrolls
+    if(!wasOpen && dx>60) openNav();
+    else if(wasOpen && dx<-60) closeNav();
+  },{passive:true});
+})();
+</script>

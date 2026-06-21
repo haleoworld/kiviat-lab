@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Business receipts</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .fld:focus { outline:none; border-color:#a78bfa; }
+    select.fld option { background:#161618; }
+    .drop { border:1.5px dashed #3a3a40; border-radius:16px; transition:border-color .15s, background .15s; }
+    .drop.drag { border-color:#a78bfa; background:#15131c; }
+    .thumb { width:100%; height:130px; object-fit:cover; border-radius:10px; background:#0e0e10; }
+    /* iOS date inputs center their value and overflow narrow boxes → left-align + allow shrink. */
+    input[type=date] { min-width:0; }
+    input[type=date]::-webkit-date-and-time-value { text-align:left; margin:0; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-5">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Business receipts</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <span id="counts" class="text-[11px] text-neutral-500 shrink-0"></span>
+    </header>
+
+    <!-- Upload -->
+    <section class="mb-6">
+      <div id="drop" class="drop p-5 text-center">
+        <div class="text-neutral-300 text-sm font-medium">Drop receipts &amp; invoices here</div>
+        <div class="text-[11px] text-neutral-500 mt-1">PDF, JPG, PNG, HEIC · multiple at once</div>
+        <div class="flex items-center justify-center gap-2 mt-4">
+          <label class="pill px-4 py-2 text-sm text-neutral-200 cursor-pointer hover:text-white">
+            📷 Snap a photo
+            <input id="cam" type="file" accept="image/*" capture="environment" multiple class="hidden" />
+          </label>
+          <label class="pill px-4 py-2 text-sm text-neutral-200 cursor-pointer hover:text-white">
+            Choose files
+            <input id="pick" type="file" accept="image/*,application/pdf,.heic" multiple class="hidden" />
+          </label>
+        </div>
+        <div id="uplStatus" class="text-[11px] mt-3 text-neutral-500"></div>
+      </div>
+    </section>
+
+    <div id="failBanner" class="hidden mb-4 card p-3.5" style="border-color:#7f1d1d;background:#1a1012">
+      <div class="text-[13px] text-rose-200 font-medium" id="failTitle"></div>
+      <div class="text-[11px] text-rose-300/80 mt-0.5">These kept their photos — top up your Anthropic API credits, then re-parse (no re-upload needed).</div>
+      <button id="reparseBtn" class="mt-2.5 px-3 py-1.5 text-[12px] rounded-full bg-rose-500/15 text-rose-200 border border-rose-500/40 hover:bg-rose-500/25">↻ Re-parse failed</button>
+      <span id="reparseStatus" class="text-[11px] ml-2 text-rose-300/70"></span>
+    </div>
+
+    <div class="card p-3 mb-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <button id="fAttention" class="pill px-3 py-1.5 text-[12px] text-neutral-300">⚠ Needs attention</button>
+        <input id="fVendor" placeholder="Vendor…" class="fld px-2.5 py-1.5 text-[12px] w-28" />
+        <select id="fCategory" class="fld px-2 py-1.5 text-[12px]"><option value="">All categories</option></select>
+        <select id="fYear" class="fld px-2 py-1.5 text-[12px]"><option value="all">All years</option></select>
+        <select id="fConf" class="fld px-2 py-1.5 text-[12px]"><option value="all">Any conf.</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+        <select id="fStatus" class="fld px-2 py-1.5 text-[12px]"><option value="all">All status</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select>
+        <span class="text-[11px] text-neutral-500">from</span>
+        <input id="fFrom" type="date" class="fld px-2 py-1.5 text-[12px]" />
+        <span class="text-[11px] text-neutral-500">to</span>
+        <input id="fTo" type="date" class="fld px-2 py-1.5 text-[12px]" />
+        <button id="fClear" class="text-[11px] text-neutral-400 hover:text-neutral-200 px-1">clear</button>
+      </div>
+      <div id="fCount" class="text-[11px] text-neutral-500 mt-2"></div>
+    </div>
+
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="font-semibold">To review <span id="pendN" class="text-neutral-500 font-normal"></span></h2>
+      <span id="saveStatus" class="text-[11px] text-neutral-500"></span>
+    </div>
+    <div id="pendList" class="space-y-3"></div>
+
+    <datalist id="ccyList">
+      <option value="CAD"></option><option value="USD"></option><option value="EUR"></option>
+      <option value="GBP"></option><option value="JPY"></option><option value="CNY"></option>
+      <option value="AUD"></option><option value="CHF"></option><option value="HKD"></option>
+      <option value="MXN"></option><option value="INR"></option>
+    </datalist>
+
+    <div id="approvedWrap" class="mt-8 hidden">
+      <button id="toggleApproved" class="text-sm text-neutral-400 hover:text-neutral-200 mb-2 flex items-center gap-1">
+        <span id="apprCaret">▸</span> Approved <span id="apprN" class="text-neutral-600"></span>
+      </button>
+      <div id="apprList" class="space-y-3 hidden"></div>
+    </div>
+
+    <footer class="mt-10 text-[11px] leading-relaxed text-neutral-600">
+      Parsed by AI — always check the amounts against the receipt before approving. Approved
+      records feed statement-matching, HST, and the accountant export (coming next).
+    </footer>
+  </div>
+
+<script>
+let receipts = [], currency = "CAD", categories = [], currentFamily = null, saveTimers = {};
+let vendors = [], fYears = [];
+let filters = {attention:false, vendor:"", category:"", year:"all", conf:"all", status:"all", from:"", to:""};
+const FLAGCHIP = {
+  duplicate:["duplicate","bg-orange-500/15 text-orange-300"],
+  refund:["refund","bg-purple-500/15 text-purple-300"],
+  low_confidence:["low conf","bg-rose-500/15 text-rose-300"],
+  tax_mismatch:["tax ≠","bg-amber-500/15 text-amber-300"],
+};
+function matchesFilters(r){
+  if(filters.attention && !r.needs_attention) return false;
+  if(filters.vendor && !String(r.vendor||"").toLowerCase().includes(filters.vendor.toLowerCase())) return false;
+  if(filters.category && r.category!==filters.category) return false;
+  if(filters.year!=="all" && String(r.fiscal_year)!==filters.year) return false;
+  if(filters.conf!=="all" && r.confidence!==filters.conf) return false;
+  if(filters.status!=="all" && r.review_status!==filters.status) return false;
+  if(filters.from && (!r.date || r.date < filters.from)) return false;
+  if(filters.to && (!r.date || r.date > filters.to)) return false;
+  return true;
+}
+const fmtN = n => (n==null||isNaN(n))?"":Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc = s => (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+function famQ(){ return currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; }
+function fileURL(id){ return `api/business/file/${id}${famQ()}`; }
+
+function setSaveStatus(state){
+  const el=document.getElementById("saveStatus");
+  const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],
+             error:["Couldn't save","text-rose-400"],idle:["","text-neutral-500"]};
+  const [t,c]=map[state]||map.idle; el.textContent=t; el.className=`text-[11px] ${c}`;
+}
+function setUpl(msg, cls){ const el=document.getElementById("uplStatus"); el.textContent=msg||""; el.className=`text-[11px] mt-3 ${cls||"text-neutral-500"}`; }
+
+const CONF = {high:["high","text-emerald-400 bg-emerald-500/10"],medium:["med","text-amber-400 bg-amber-500/10"],low:["low","text-rose-400 bg-rose-500/10"]};
+function taxOk(r){
+  const sum=(+r.subtotal||0)+(+r.gst||0)+(+r.pst||0)+(+r.hst||0)+(+r.tip||0);
+  return Math.abs(sum-(+r.total||0)) <= 0.02;
+}
+function isPdf(r){ return (r.stored_ext||"").toLowerCase()===".pdf"; }
+
+// Category = the accountant's exact buckets (served by the API). A select keeps the
+// export clean; if a record carries an off-list value, inject it so nothing is lost.
+function catField(r){
+  const opts = categories.slice();
+  if(r.category && !opts.includes(r.category)) opts.unshift(r.category);
+  const o = opts.map(c=>`<option value="${esc(c)}" ${r.category===c?"selected":""}>${esc(c)}</option>`).join("");
+  return `<div class="col-span-2"><div class="text-[10px] text-neutral-500 mb-1">Category</div>
+    <select data-f="category" data-id="${r.id}" class="fld w-full px-2.5 py-1.5 text-sm">
+      <option value="" ${!r.category?"selected":""}>— choose —</option>${o}</select></div>`;
+}
+
+function fieldRow(id, key, label, val, opts){
+  opts = opts||{};
+  const w = opts.money
+    ? `<input data-f="${key}" data-id="${id}" inputmode="decimal" value="${val!==""&&val!=null?fmtN(val):""}" class="fld w-full px-2.5 py-1.5 text-sm num text-right" />`
+    : opts.currency
+    ? `<input data-f="${key}" data-id="${id}" list="ccyList" value="${esc(val)}" placeholder="CAD" maxlength="3" autocapitalize="characters" spellcheck="false" class="fld w-full px-2.5 py-1.5 text-sm uppercase" />`
+    : opts.select
+    ? `<select data-f="${key}" data-id="${id}" class="fld w-full px-2.5 py-1.5 text-sm">${opts.select.map(o=>`<option value="${o}" ${val===o?"selected":""}>${o[0].toUpperCase()+o.slice(1)}</option>`).join("")}</select>`
+    : opts.date
+    ? `<input data-f="${key}" data-id="${id}" type="date" value="${esc(val)}" class="fld w-full px-2.5 py-1.5 text-sm" />`
+    : `<input data-f="${key}" data-id="${id}" type="text" value="${esc(val)}" placeholder="${opts.ph||""}" class="fld w-full px-2.5 py-1.5 text-sm" />`;
+  return `<div class="${opts.span||""}"><div class="text-[10px] text-neutral-500 mb-1">${label}</div>${w}</div>`;
+}
+
+function receiptCard(r){
+  const [cl,ccls]=CONF[r.confidence]||CONF.low;
+  const badTax=!taxOk(r);
+  const note=r.notes?`<div class="text-[11px] text-rose-300/90 mt-2">⚠ ${esc(r.notes)}</div>`:"";
+  const why=(r.confidence!=="high" && r.confidence_reason)
+    ? `<div class="text-[11px] text-amber-300/90 mb-2.5 leading-snug px-2.5 py-1.5 rounded-lg bg-amber-500/10">🔎 ${esc(r.confidence_reason)}</div>` : "";
+  const thumb = isPdf(r)
+    ? `<a href="${fileURL(r.id)}" target="_blank" class="thumb flex items-center justify-center text-neutral-500 text-xs">📄 PDF<br>open</a>`
+    : `<a href="${fileURL(r.id)}" target="_blank"><img src="${fileURL(r.id)}" class="thumb" alt="receipt" /></a>`;
+  const approved = r.review_status==="approved";
+  const actions = approved
+    ? `<button data-act="reopen" data-id="${r.id}" class="pill px-3 py-1.5 text-[12px] text-neutral-300">Reopen</button>
+       <button data-act="del" data-id="${r.id}" class="text-[12px] text-rose-400/80 hover:text-rose-300 px-2">Delete</button>`
+    : `<button data-act="approve" data-id="${r.id}" class="px-3 py-1.5 text-[12px] rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25">✓ Approve</button>
+       <button data-act="reject" data-id="${r.id}" class="pill px-3 py-1.5 text-[12px] text-neutral-300">Reject</button>
+       <button data-act="del" data-id="${r.id}" class="text-[12px] text-rose-400/80 hover:text-rose-300 px-2">Delete</button>`;
+  return `<div class="card p-4" data-card="${r.id}">
+    <div class="grid grid-cols-1 sm:grid-cols-[140px_1fr] gap-4">
+      <div>${thumb}
+        <div class="flex items-center flex-wrap gap-1.5 mt-2">
+          <span class="text-[10px] px-1.5 py-0.5 rounded ${ccls}">${cl} conf</span>
+          ${r.review_status==="rejected"?`<span class="text-[10px] px-1.5 py-0.5 rounded text-rose-400 bg-rose-500/10">rejected</span>`:""}
+          ${(r.flags||[]).filter(f=>FLAGCHIP[f]).map(f=>`<span class="text-[10px] px-1.5 py-0.5 rounded ${FLAGCHIP[f][1]}">${FLAGCHIP[f][0]}</span>`).join("")}
+          ${r.hst_estimated?`<span class="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300" title="HST estimated from the category rate — edit to override">HST est.</span>`:""}
+        </div>
+        <div class="text-[10px] text-neutral-600 mt-1 truncate" title="${esc(r.source_file)}">${esc(r.source_file)}</div>
+      </div>
+      <div>
+        ${why}
+        <div class="grid grid-cols-2 gap-2.5">
+          ${fieldRow(r.id,"vendor","Vendor",r.vendor,{span:"col-span-2",ph:"Merchant / client"})}
+          ${fieldRow(r.id,"date","Date",r.date,{date:true})}
+          ${fieldRow(r.id,"direction","Direction",r.direction,{select:["expense","income"]})}
+          ${catField(r)}
+          ${fieldRow(r.id,"subtotal","Subtotal",r.subtotal,{money:true})}
+          ${fieldRow(r.id,"hst","HST",r.hst,{money:true})}
+          ${fieldRow(r.id,"gst","GST",r.gst,{money:true})}
+          ${fieldRow(r.id,"pst","PST",r.pst,{money:true})}
+          ${fieldRow(r.id,"tip","Tip",r.tip,{money:true})}
+          ${fieldRow(r.id,"total","Total",r.total,{money:true})}
+          ${fieldRow(r.id,"currency","Currency",r.currency,{currency:true})}
+          ${fieldRow(r.id,"payment_method","Paid with",r.payment_method,{ph:"Amex ••1234"})}
+        </div>
+        ${badTax?`<div class="text-[11px] text-amber-400/90 mt-2">⚠ Subtotal + taxes + tip ≠ total — re-check the amounts.</div>`:""}
+        ${note}
+        <div class="flex items-center gap-2 mt-3">${actions}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function render(){
+  const fr = receipts.filter(matchesFilters);
+  const pend = fr.filter(r=>r.review_status!=="approved");
+  const appr = fr.filter(r=>r.review_status==="approved");
+  const anyFilter = filters.attention||filters.vendor||filters.category||filters.year!=="all"||filters.conf!=="all"||filters.status!=="all"||filters.from||filters.to;
+  document.getElementById("fCount").textContent = anyFilter ? `Showing ${fr.length} of ${receipts.length} receipts` : "";
+  document.getElementById("pendList").innerHTML = pend.length
+    ? pend.map(receiptCard).join("")
+    : `<div class="card p-5 text-sm text-neutral-400">${anyFilter?"No matching receipts to review.":"Nothing to review. Upload a receipt above."}</div>`;
+  document.getElementById("pendN").textContent = pend.length?`· ${pend.length}`:"";
+  document.getElementById("counts").textContent = `${receipts.length} total · ${receipts.filter(r=>r.review_status==="approved").length} approved`;
+
+  const wrap=document.getElementById("approvedWrap");
+  if(appr.length){
+    wrap.classList.remove("hidden");
+    document.getElementById("apprN").textContent = `(${appr.length})`;
+    document.getElementById("apprList").innerHTML = appr.map(receiptCard).join("");
+  } else wrap.classList.add("hidden");
+
+  // Failed-parse banner (e.g. API out of credits) + re-parse button
+  const failed = receipts.filter(r=>String(r.notes||"").startsWith("AI parse failed"));
+  const fb=document.getElementById("failBanner");
+  if(failed.length){
+    fb.classList.remove("hidden");
+    document.getElementById("failTitle").textContent = `⚠ ${failed.length} receipt${failed.length>1?"s":""} couldn't be parsed`;
+  } else fb.classList.add("hidden");
+  wire();
+}
+
+document.getElementById("reparseBtn").addEventListener("click", async ()=>{
+  const btn=document.getElementById("reparseBtn"), st=document.getElementById("reparseStatus");
+  btn.disabled=true; st.textContent="Re-parsing… (this can take a while)";
+  try{
+    const r=await fetch(`api/business/receipts/reparse-failed${famQ()}`,{method:"POST"});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||"failed");
+    st.textContent = `Fixed ${d.fixed}${d.still_failing?`, ${d.still_failing} still failing (check credits)`:""}.`;
+    const rr=await fetch(`api/business/receipts${famQ()}`); receipts=(await rr.json()).receipts||receipts;
+    render();
+  }catch(e){ st.textContent="Couldn't re-parse: "+e.message; }
+  finally{ btn.disabled=false; }
+});
+
+function wire(){
+  document.querySelectorAll("[data-f]").forEach(el=>{
+    const ev = (el.tagName==="SELECT"||el.type==="date")?"change":"input";
+    el.addEventListener(ev, e=>{
+      const id=el.dataset.id, key=el.dataset.f, rec=receipts.find(r=>r.id===id);
+      if(!rec) return;
+      let v=el.value;
+      if(["subtotal","tip","gst","pst","hst","total"].includes(key)){
+        v=parseFloat(String(v).replace(/[, ]/g,""))||0; rec[key]=v;
+      } else if(key==="currency"){
+        v=v.toUpperCase().replace(/[^A-Z]/g,"").slice(0,3); rec[key]=v; el.value=v;
+      } else rec[key]=v;
+      if(["subtotal","tip","gst","pst","hst","total"].includes(key)) refreshTaxWarn(id);
+      scheduleSave(id);
+    });
+  });
+  document.querySelectorAll("[data-act]").forEach(b=>{
+    b.addEventListener("click", ()=>doAction(b.dataset.act, b.dataset.id));
+  });
+}
+
+function refreshTaxWarn(id){ /* light touch: full re-render on blur is overkill; warning updates on next render */ }
+
+function scheduleSave(id){
+  setSaveStatus("saving");
+  clearTimeout(saveTimers[id]);
+  saveTimers[id]=setTimeout(()=>saveOne(id), 700);
+}
+async function saveOne(id){
+  const rec=receipts.find(r=>r.id===id); if(!rec) return;
+  try{
+    const r=await fetch(`api/business/receipts/${id}${famQ()}`,{method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({vendor:rec.vendor,date:rec.date,direction:rec.direction,category:rec.category,
+        subtotal:rec.subtotal,gst:rec.gst,pst:rec.pst,hst:rec.hst,tip:rec.tip,total:rec.total,
+        currency:rec.currency,payment_method:rec.payment_method})});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    setSaveStatus("saved");
+  }catch(e){ setSaveStatus("error"); }
+}
+
+async function doAction(act, id){
+  const rec=receipts.find(r=>r.id===id); if(!rec) return;
+  if(act==="del"){
+    if(!confirm("Delete this receipt and its file?")) return;
+    try{ const r=await fetch(`api/business/receipts/${id}${famQ()}`,{method:"DELETE"});
+      if(!r.ok) throw 0; receipts=receipts.filter(x=>x.id!==id); render(); }
+    catch(e){ setSaveStatus("error"); }
+    return;
+  }
+  const status = act==="approve"?"approved":act==="reject"?"rejected":"pending";
+  try{
+    const r=await fetch(`api/business/receipts/${id}${famQ()}`,{method:"PUT",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({review_status:status})});
+    if(!r.ok) throw 0;
+    rec.review_status=status; render(); setSaveStatus("saved");
+  }catch(e){ setSaveStatus("error"); }
+}
+
+// ---- upload ----
+async function upload(fileList){
+  const files=[...fileList]; if(!files.length) return;
+  const fd=new FormData(); files.forEach(f=>fd.append("files", f));
+  setUpl(`Uploading & parsing ${files.length} file${files.length>1?"s":""}…`, "text-amber-400");
+  try{
+    const r=await fetch(`api/business/upload${famQ()}`,{method:"POST",body:fd});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const d=await r.json();
+    (d.receipts||[]).forEach(rec=>receipts.unshift(rec));
+    render();
+    const errs=d.errors||[], dups=d.duplicates||[], n=(d.receipts||[]).length;
+    const parts=[];
+    if(n) parts.push(`Parsed ${n}`);
+    if(dups.length) parts.push(`${dups.length} already uploaded (skipped)`);
+    if(errs.length) parts.push(`${errs.length} failed: ${errs.map(e=>e.error).join("; ")}`);
+    const cls = errs.length ? "text-rose-400" : dups.length && !n ? "text-amber-400" : "text-emerald-400";
+    setUpl(parts.join(" · ")+(n?" — review below.":""), cls);
+  }catch(e){ setUpl("Upload failed: "+e.message, "text-rose-400"); }
+}
+
+document.getElementById("cam").addEventListener("change", e=>{ upload(e.target.files); e.target.value=""; });
+document.getElementById("pick").addEventListener("change", e=>{ upload(e.target.files); e.target.value=""; });
+const drop=document.getElementById("drop");
+["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("drag");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("drag");}));
+drop.addEventListener("drop", e=>{ if(e.dataTransfer.files.length) upload(e.dataTransfer.files); });
+
+document.getElementById("toggleApproved").addEventListener("click", ()=>{
+  const l=document.getElementById("apprList"), c=document.getElementById("apprCaret");
+  l.classList.toggle("hidden"); c.textContent=l.classList.contains("hidden")?"▸":"▾";
+});
+
+async function load(){
+  try{
+    const fr=await fetch("api/families"); const fd=await fr.json();
+    const fam=(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
+    currentFamily = fam?fam.id:null;
+    const r=await fetch(`api/business/receipts${famQ()}`); const d=await r.json();
+    receipts=d.receipts||[]; currency=d.currency||"CAD"; categories=d.categories||[];
+    vendors=d.vendors||[]; fYears=d.fiscal_years||[];
+    populateFilters();
+    document.getElementById("meta").textContent = `${fam?fam.name:"household"} · receipts in ${currency}`;
+    render(); setSaveStatus("idle");
+  }catch(e){ document.getElementById("meta").textContent="Couldn't load."; }
+}
+
+function populateFilters(){
+  document.getElementById("fCategory").innerHTML =
+    `<option value="">All categories</option>`+categories.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  document.getElementById("fYear").innerHTML =
+    `<option value="all">All years</option>`+fYears.map(y=>`<option value="${y}">FY${y}</option>`).join("");
+}
+function wireFilters(){
+  const at=document.getElementById("fAttention");
+  at.addEventListener("click",()=>{ filters.attention=!filters.attention;
+    at.classList.toggle("bg-amber-500/20",filters.attention); at.classList.toggle("text-amber-200",filters.attention); render(); });
+  document.getElementById("fVendor").addEventListener("input",e=>{ filters.vendor=e.target.value; render(); });
+  document.getElementById("fCategory").addEventListener("change",e=>{ filters.category=e.target.value; render(); });
+  document.getElementById("fYear").addEventListener("change",e=>{ filters.year=e.target.value; render(); });
+  document.getElementById("fConf").addEventListener("change",e=>{ filters.conf=e.target.value; render(); });
+  document.getElementById("fStatus").addEventListener("change",e=>{ filters.status=e.target.value; render(); });
+  document.getElementById("fFrom").addEventListener("change",e=>{ filters.from=e.target.value; render(); });
+  document.getElementById("fTo").addEventListener("change",e=>{ filters.to=e.target.value; render(); });
+  document.getElementById("fClear").addEventListener("click",()=>{
+    filters={attention:false,vendor:"",category:"",year:"all",conf:"all",status:"all",from:"",to:""};
+    ["fVendor","fFrom","fTo"].forEach(id=>document.getElementById(id).value="");
+    ["fCategory"].forEach(id=>document.getElementById(id).value="");
+    ["fYear","fConf","fStatus"].forEach(id=>document.getElementById(id).value="all");
+    at.classList.remove("bg-amber-500/20","text-amber-200"); render();
+  });
+}
+wireFilters();
+load();
+</script>
+</body>
+</html>

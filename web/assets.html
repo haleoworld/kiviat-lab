@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Assets</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .fld:focus, .fld:focus-within { outline:none; border-color:#a78bfa; }
+    select.fld option { background:#161618; }
+    .seg { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .seg button.on { background:#2e2e32; color:#fff; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-4">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Assets</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[35vw] truncate"></select>
+    </header>
+
+    <!-- Preset + gross/net toggles -->
+    <div class="flex flex-wrap items-center gap-2 mb-2">
+      <div class="seg flex text-xs">
+        <button data-preset="traditional" class="px-3 py-1.5 rounded-full on">Traditional net worth</button>
+        <button data-preset="rdpd" class="px-3 py-1.5 rounded-full text-neutral-400">Rich Dad</button>
+      </div>
+      <div class="seg flex text-xs">
+        <button data-mode="gross" class="px-3 py-1.5 rounded-full on">Gross</button>
+        <button data-mode="net" class="px-3 py-1.5 rounded-full text-neutral-400">Net</button>
+      </div>
+    </div>
+    <p id="presetNote" class="text-[11px] text-neutral-500 mb-1 leading-relaxed"></p>
+    <p id="modeNote" class="text-[11px] text-neutral-500 mb-3 leading-relaxed"></p>
+
+    <!-- Month bar -->
+    <div class="mb-4">
+      <div class="flex items-center gap-2 flex-wrap">
+        <select id="monthSel" class="pill px-3 py-2 text-sm text-neutral-100 outline-none"></select>
+        <button id="addMonth" class="pill px-3 py-2 text-sm text-neutral-200 hover:text-white whitespace-nowrap">+ Add month</button>
+        <button id="delMonth" class="pill px-3 py-2 text-sm text-neutral-400 hover:text-rose-300 whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed">Remove month</button>
+      </div>
+      <span id="saveStatus" class="text-[11px] text-neutral-500 mt-2 block">…</span>
+    </div>
+
+    <div id="content" class="space-y-4"></div>
+
+    <footer class="mt-8 text-[11px] leading-relaxed text-neutral-600">
+      Upload asset values monthly (property, commodities) and your portfolio periodically.
+      Liabilities are pulled from your <span class="text-neutral-400">Finances</span> page debt.
+      Net = counted assets − liabilities. Under Rich Dad, anything with negative monthly cash flow
+      (it costs you) is reclassified as a liability and drops out of your assets.
+    </footer>
+  </div>
+
+<script>
+const CUR=(n)=>(n<0?"-":"")+"$"+Math.abs(Math.round(n||0)).toLocaleString();
+const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const clone=(x)=>JSON.parse(JSON.stringify(x));
+const CLASSES={
+  real_estate:{label:"Real estate",color:"#60a5fa"},
+  equities:{label:"Equities",color:"#34d399"},
+  cash:{label:"Cash / T-bill",color:"#a3a3a3"},
+  commodity:{label:"Commodity",color:"#fbbf24"},
+  crypto:{label:"Crypto",color:"#f472b6"},
+  business:{label:"Business",color:"#a78bfa"},
+  vehicle:{label:"Vehicle",color:"#fb923c"},
+  other:{label:"Other",color:"#22d3ee"},
+};
+
+let data={months:{}}, seed=null, seedMonth=null, currentMonth=null, currentFamily=null, saveTimer=null;
+let preset='traditional', mode='gross', liab={by_month:{},fallback:0}, contrib={}, donut=null, netChart=null;
+
+function monthLabel(k){const[y,m]=k.split('-');return `${MON[(+m)-1]||'?'} ${y}`;}
+function monthShort(k){const[y,m]=k.split('-');return `${MON[(+m)-1]||'?'} '${y.slice(2)}`;}
+function nextMonth(k){let[y,m]=k.split('-').map(Number);m++;if(m>12){m=1;y++;}return `${y}-${String(m).padStart(2,'0')}`;}
+function monthGap(a,b){const[ya,ma]=a.split('-').map(Number),[yb,mb]=b.split('-').map(Number);return (yb-ya)*12+(mb-ma);}
+// Standard balance-sheet net worth at a month (gross assets − all debt), toggle-independent.
+function grossAssetsAt(m){return items(m).reduce((s,it)=>s+(+it.value||0),0);}
+function totalDebtAt(m){
+  if(liab.by_month && liab.by_month[m]!=null) return liab.by_month[m];
+  const prior=Object.keys(liab.by_month||{}).filter(k=>k<=m).sort();
+  return prior.length ? liab.by_month[prior[prior.length-1]] : (liab.fallback||0);
+}
+function nwAt(m){return grossAssetsAt(m)-totalDebtAt(m);}
+function contribFor(m){
+  if(contrib[m]!=null) return contrib[m];
+  const prior=Object.keys(contrib).filter(k=>k<=m).sort();
+  return prior.length ? contrib[prior[prior.length-1]] : 0;
+}
+function monthKeys(){return Object.keys(data.months).sort();}
+function items(m){const mo=data.months[m]||(data.months[m]={items:[]});return mo.items||(mo.items=[]);}
+function isAsset(it){return preset==='traditional' || (+it.cashflow||0)>=0;}
+function debtsFor(m){
+  if(liab.debts_by_month && liab.debts_by_month[m]) return liab.debts_by_month[m];
+  const prior=Object.keys(liab.debts_by_month||{}).filter(k=>k<=m).sort();
+  if(prior.length) return liab.debts_by_month[prior[prior.length-1]];
+  return liab.fallback_debts||[];
+}
+// NET mode subtracts each loan from the asset whose name appears in the loan's
+// label (e.g. "Mortgage — Home (primary)" → "Home (primary)"); loans with no
+// matching asset stay as standalone liabilities. GROSS mode nets nothing.
+function computed(m){
+  const its=items(m);
+  const debts=debtsFor(m).map(d=>({cat:(d.category||'').toLowerCase(),bal:+d.balance||0}));
+  const used=debts.map(()=>false);
+  const vals=its.map(it=>+it.value||0);
+  if(mode==='net'){
+    its.forEach((it,i)=>{ const nm=(it.name||'').toLowerCase().trim(); if(nm.length<3) return;
+      debts.forEach((d,j)=>{ if(!used[j] && d.cat.includes(nm)){ vals[i]-=d.bal; used[j]=true; } }); });
+  }
+  const liabRemaining=debts.reduce((s,d,j)=>s+(used[j]?0:d.bal),0);
+  return {its,vals,liab:liabRemaining};
+}
+function assetTotal(m){const c=computed(m);return c.its.reduce((s,it,i)=>s+(isAsset(it)?c.vals[i]:0),0);}
+function excludedTotal(m){const c=computed(m);return c.its.reduce((s,it,i)=>s+(!isAsset(it)?c.vals[i]:0),0);}
+function liabilityFor(m){return computed(m).liab;}
+function netFor(m){return assetTotal(m)-liabilityFor(m);}
+function allocByClass(m){const c=computed(m);const o={};c.its.forEach((it,i)=>{if(isAsset(it))o[it.class]=(o[it.class]||0)+c.vals[i];});return o;}
+
+// ---- persistence ----
+function url(){return "api/assets"+(currentFamily?`?family=${encodeURIComponent(currentFamily)}`:"");}
+function setStatus(s,msg){const el=document.getElementById('saveStatus');if(!el)return;
+  const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],
+    seeded:["Pre-filled from snapshot · saved ✓","text-emerald-400"],
+    error:["Couldn't save — retry on next edit","text-rose-400"],idle:["","text-neutral-500"]};
+  const[t,c]=map[s]||map.idle;el.textContent=msg||t;el.className=`text-[11px] shrink-0 ${c}`;}
+function scheduleSave(){setStatus('saving');clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,700);}
+async function saveNow(){try{const r=await fetch(url(),{method:"PUT",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({months:data.months})});setStatus(r.ok?'saved':'error');}catch(e){setStatus('error');}}
+
+// ---- render ----
+function presetNote(){
+  return preset==='traditional'
+    ? "Traditional net worth: everything counts as an asset at current value — home, vehicles, investments, cash, real estate — minus all liabilities."
+    : "Rich Dad: only what puts money in your pocket counts. Anything with negative monthly cash flow (home, a bleeding rental, cars) is treated as a liability and excluded from assets.";
+}
+function modeNote(){
+  return mode==='gross'
+    ? "Gross: each asset at its full value; all debt is a separate liability."
+    : "Net: each asset is shown after the loan against it (real estate net of its mortgage); only loans with no matching asset stay as liabilities. Net worth is identical — only the allocation shifts.";
+}
+function breakdownCard(m){
+  const a=assetTotal(m), x=excludedTotal(m), l=liabilityFor(m), n=netFor(m);
+  const cell=(lbl,val,cls)=>`<div><div class="text-[11px] text-neutral-500">${lbl}</div><div class="num text-lg font-semibold ${cls}">${CUR(val)}</div></div>`;
+  return `<div class="card p-4">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+      ${cell("Assets counted",a,"text-emerald-400")}
+      ${cell(preset==='rdpd'?"Excluded (liability)":"Excluded",x,"text-neutral-400")}
+      ${cell("Liabilities",l,"text-rose-400")}
+      ${cell("Net assets",n,n<0?"text-rose-400":"text-emerald-400")}
+    </div>
+    <p class="text-[11px] text-neutral-600 mt-2 text-center">Liabilities from your Finances debt${liab.by_month&&liab.by_month[m]!=null?` (${monthLabel(m)})`:" (snapshot fallback)"}.</p>
+  </div>`;
+}
+function allocCard(m){
+  const alloc=allocByClass(m), total=Object.values(alloc).reduce((s,v)=>s+v,0)||1;
+  const rows=Object.entries(alloc).sort((a,b)=>b[1]-a[1]).map(([c,v])=>{
+    const m=CLASSES[c]||CLASSES.other;
+    return `<div class="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-800 last:border-0">
+      <span class="flex items-center gap-2 min-w-0"><span style="width:10px;height:10px;border-radius:2px;background:${m.color}" class="inline-block shrink-0"></span><span class="text-sm truncate">${m.label}</span></span>
+      <span class="num text-sm shrink-0">${CUR(v)} <span class="text-neutral-500">· ${Math.round(100*v/total)}%</span></span></div>`;
+  }).join('') || `<p class="text-xs text-neutral-600 py-2">No counted assets.</p>`;
+  return `<div class="card p-4">
+    <h2 class="font-semibold mb-1">Asset allocation</h2>
+    <p class="text-[11px] text-neutral-500 mb-2">${monthLabel(m)} · counted assets · ${mode} value</p>
+    <div class="flex flex-col sm:flex-row gap-4 items-center">
+      <div class="w-40 h-40 shrink-0"><canvas id="allocChart"></canvas></div>
+      <div class="flex-1 w-full">${rows}</div>
+    </div></div>`;
+}
+function netCard(){
+  return `<div class="card p-4">
+    <h2 class="font-semibold mb-1">Net assets over time</h2>
+    <p class="text-[11px] text-neutral-500 mb-2">${monthKeys().length} month${monthKeys().length===1?'':'s'} · ${preset==='traditional'?'Traditional':'Rich Dad'} preset</p>
+    <div style="height:200px"><canvas id="netChart"></canvas></div>
+  </div>`;
+}
+// Statement of changes: how net worth moved month-over-month, and why.
+function changesCard(){
+  const keys=monthKeys();
+  let inner;
+  if(keys.length<2){
+    inner=`<p class="text-xs text-neutral-600 py-1">Add another month to see what moved your net worth — saved vs market vs debt paid down.</p>`;
+  } else {
+    const curr=keys[keys.length-1], prev=keys[keys.length-2], gap=monthGap(prev,curr)||1;
+    const dNW=nwAt(curr)-nwAt(prev);
+    const dAssets=grossAssetsAt(curr)-grossAssetsAt(prev);
+    const debtPaydown=totalDebtAt(prev)-totalDebtAt(curr);
+    const saved=contribFor(curr)*gap;
+    const market=dAssets-saved;
+    const row=(lbl,v,note)=>`<div class="py-1.5 border-b border-neutral-800 last:border-0">
+      <div class="flex items-baseline justify-between gap-2"><span class="text-sm text-neutral-300">${lbl}</span>
+        <span class="num text-sm shrink-0 ${v>=0?'text-emerald-400':'text-rose-400'}">${v>=0?'+':''}${CUR(v)}</span></div>
+      <div class="text-[10px] text-neutral-600">${note}</div></div>`;
+    inner=`<p class="text-[11px] text-neutral-500 mb-2">${monthLabel(prev)} → ${monthLabel(curr)} · net worth ${dNW>=0?'rose':'fell'}
+        <span class="${dNW>=0?'text-emerald-300':'text-rose-300'} num">${dNW>=0?'+':''}${CUR(dNW)}</span>
+        (${CUR(nwAt(prev))} → ${CUR(nwAt(curr))})</p>
+      ${row('Saved (net cash flow)', saved, 'income − spending − debt payments + savings, from Finances')}
+      ${row('Market &amp; other', market, 'asset value moves + anything not explicitly tracked')}
+      ${row('Debt paid down', debtPaydown, 'reduction in what you owe')}`;
+  }
+  return `<div class="card p-4" id="changesCard"><h2 class="font-semibold mb-1">What changed your net worth</h2>${inner}</div>`;
+}
+// ---- liquidity (how fast each asset converts to cash) ----
+const LIQ={ liquid:{label:'Liquid',color:'#34d399',note:'cash · TFSA · T-bills'},
+  semi:{label:'Semi-liquid',color:'#fbbf24',note:'RRSP · corp — taxed to access'},
+  locked:{label:'Locked',color:'#f87171',note:'real estate · RESP'} };
+function defaultLiquidity(name, cls){
+  const n=(name||'').toLowerCase();
+  if(cls==='real_estate') return 'locked';
+  if(/resp/.test(n)) return 'locked';
+  if(/rrsp|\brsp\b|lira|pension|corp/.test(n)) return 'semi';
+  if(/tfsa/.test(n)) return 'liquid';
+  if(['cash','tbill','crypto'].includes(cls)) return 'liquid';
+  if(['vehicle','business'].includes(cls)) return 'locked';
+  return 'liquid';
+}
+function liqOf(it){ return it.liquidity || defaultLiquidity(it.name, it.class); }
+function liquidityBreakdown(m){
+  const c=computed(m), o={liquid:0,semi:0,locked:0,total:0};
+  c.its.forEach((it,i)=>{ o[liqOf(it)]+=c.vals[i]; o.total+=c.vals[i]; });
+  return o;
+}
+function liquidityCard(m){
+  const b=liquidityBreakdown(m), t=b.total||1;
+  const seg=k=>`<div style="width:${Math.max(0,100*b[k]/t)}%;background:${LIQ[k].color}" class="h-full"></div>`;
+  const row=k=>`<div class="flex items-center justify-between py-1.5 border-b border-neutral-800 last:border-0">
+    <span class="flex items-center gap-2 min-w-0"><span style="width:10px;height:10px;border-radius:2px;background:${LIQ[k].color}" class="inline-block shrink-0"></span><span class="text-sm">${LIQ[k].label}</span><span class="text-[10px] text-neutral-600 truncate hidden sm:inline">${LIQ[k].note}</span></span>
+    <span class="num text-sm shrink-0">${CUR(b[k])} <span class="text-neutral-500">· ${Math.round(100*b[k]/t)}%</span></span></div>`;
+  return `<div class="card p-4" id="liquidityCard">
+    <h2 class="font-semibold mb-1">Liquidity</h2>
+    <p class="text-[11px] text-neutral-500 mb-2">How fast each asset turns into cash. Only <span class="text-emerald-300">${CUR(b.liquid)}</span> of your ${CUR(b.total)} is quickly accessible.</p>
+    <div class="flex h-2 rounded overflow-hidden mb-3 bg-neutral-800">${seg('liquid')}${seg('semi')}${seg('locked')}</div>
+    ${row('liquid')}${row('semi')}${row('locked')}
+  </div>`;
+}
+function itemRow(it,i,netVal){
+  const opts=Object.entries(CLASSES).map(([k,v])=>`<option value="${k}" ${it.class===k?'selected':''}>${v.label}</option>`).join('');
+  const excluded = preset==='rdpd' && (+it.cashflow||0)<0;
+  const netHint = (mode==='net' && netVal!=null && Math.round(netVal)!==Math.round(+it.value||0))
+    ? `<div class="text-[11px] text-blue-300/80 mt-1">net of loan: ${CUR(netVal)}</div>` : '';
+  return `<div class="py-2.5 border-b border-neutral-800 last:border-0 ${excluded?'opacity-60':''}">
+    <div class="flex items-center gap-2">
+      <input data-f="${i}|name" value="${(it.name||'').replace(/"/g,'&quot;')}" placeholder="Name" class="fld flex-1 min-w-0 px-2 py-1.5 text-sm"/>
+      <select data-f="${i}|class" class="fld px-2 py-1.5 text-sm shrink-0">${opts}</select>
+      <button data-del="${i}" aria-label="Remove" class="text-neutral-600 hover:text-rose-300 text-sm px-1 shrink-0">✕</button>
+    </div>
+    <div class="flex items-center gap-2 mt-1.5">
+      <div class="fld flex items-center px-2 py-1 flex-1"><span class="text-neutral-500 text-[11px] mr-1">value $</span>
+        <input data-f="${i}|value" inputmode="numeric" value="${Math.round(it.value||0).toLocaleString()}" class="bg-transparent num text-sm w-full outline-none text-neutral-100"/></div>
+      <div class="fld flex items-center px-2 py-1 flex-1"><span class="text-neutral-500 text-[11px] mr-1">cash flow $</span>
+        <input data-f="${i}|cashflow" inputmode="numeric" value="${Math.round(it.cashflow||0).toLocaleString()}" class="bg-transparent num text-sm w-full outline-none text-neutral-100"/><span class="text-neutral-500 text-[11px] ml-1">/mo</span></div>
+      ${excluded?'<span class="text-[10px] text-rose-300/80 shrink-0">liability</span>':''}
+    </div>
+    <div class="flex items-center gap-2 mt-1.5 text-[11px]">
+      <span class="text-neutral-500">liquidity</span>
+      <select data-f="${i}|liquidity" class="fld px-2 py-1 text-[11px]">
+        <option value="liquid" ${liqOf(it)==='liquid'?'selected':''}>Liquid</option>
+        <option value="semi" ${liqOf(it)==='semi'?'selected':''}>Semi-liquid</option>
+        <option value="locked" ${liqOf(it)==='locked'?'selected':''}>Locked</option>
+      </select>
+    </div>
+    ${netHint}
+  </div>`;
+}
+function itemsCard(m){
+  const c=computed(m);
+  const list=items(m).map((it,i)=>itemRow(it,i,c.vals[i])).join('') || `<p class="text-xs text-neutral-600 py-2">No items yet.</p>`;
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between mb-1"><h2 class="font-semibold">Holdings &amp; assets</h2>
+      <span class="num text-sm font-semibold text-emerald-400">${CUR(assetTotal(m))}</span></div>
+    <p class="text-[11px] text-neutral-500 mb-1">Monthly cash flow drives the Rich-Dad test: negative = costs you = liability.</p>
+    <div>${list}</div>
+    <button id="addItem" class="text-[11px] text-neutral-400 hover:text-violet-300 mt-2">+ add asset</button>
+  </div>`;
+}
+
+function render(){
+  document.getElementById('presetNote').textContent=presetNote();
+  document.getElementById('modeNote').textContent=modeNote();
+  const ms=document.getElementById('monthSel');
+  ms.innerHTML=monthKeys().slice().reverse().map(k=>`<option value="${k}" ${k===currentMonth?'selected':''}>${monthLabel(k)}</option>`).join('');
+  document.getElementById('delMonth').disabled = monthKeys().length<=1;
+  const m=currentMonth;
+  document.getElementById('content').innerHTML=breakdownCard(m)+allocCard(m)+liquidityCard(m)+netCard()+changesCard()+itemsCard(m);
+  // wire item fields
+  document.querySelectorAll('[data-f]').forEach(inp=>inp.addEventListener('input',e=>{
+    const [i,field]=e.target.dataset.f.split('|'); const rec=items(currentMonth)[+i]; if(!rec)return;
+    if(field==='name'||field==='class'||field==='liquidity') rec[field]=e.target.value;
+    else rec[field]=parseFloat(e.target.value.replace(/[^0-9.\-]/g,''))||0;
+    if(field==='class'||field==='cashflow') render();   // class/cashflow change re-renders (alloc + asset/liability flip)
+    else { updateCharts(); }
+    scheduleSave();
+  }));
+  document.getElementById('addItem').addEventListener('click',()=>{ items(currentMonth).push({name:'',class:'other',value:0,cashflow:0}); render(); scheduleSave(); });
+  document.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{ items(currentMonth).splice(+b.dataset.del,1); render(); scheduleSave(); }));
+  updateCharts();
+}
+
+function updateCharts(){
+  // refresh breakdown numbers in place
+  const host=document.getElementById('content');
+  if(host && host.firstElementChild) host.firstElementChild.outerHTML=breakdownCard(currentMonth);
+  const lc=document.getElementById('liquidityCard'); if(lc) lc.outerHTML=liquidityCard(currentMonth);
+  const cc=document.getElementById('changesCard'); if(cc) cc.outerHTML=changesCard();
+  drawDonut(); drawNet();
+}
+function drawDonut(){
+  const cv=document.getElementById('allocChart'); if(!cv)return;
+  const alloc=allocByClass(currentMonth);
+  const entries=Object.entries(alloc).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
+  if(donut)donut.destroy();
+  donut=new Chart(cv,{type:'doughnut',
+    data:{labels:entries.map(([c])=>(CLASSES[c]||CLASSES.other).label),
+      datasets:[{data:entries.map(([,v])=>v),backgroundColor:entries.map(([c])=>(CLASSES[c]||CLASSES.other).color),
+        borderColor:'#0a0a0b',borderWidth:2}]},
+    options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:i=>`${i.label}: ${CUR(i.parsed)}`}}},cutout:'62%',responsive:true,maintainAspectRatio:true}});
+}
+function drawNet(){
+  const cv=document.getElementById('netChart'); if(!cv)return;
+  const keys=monthKeys();
+  if(netChart)netChart.destroy();
+  netChart=new Chart(cv,{type:'line',
+    data:{labels:keys.map(monthShort),datasets:[
+      {label:'Net assets',data:keys.map(netFor),borderColor:'#a78bfa',backgroundColor:'#a78bfa',borderWidth:2,pointRadius:3,tension:0.25},
+      {label:'Assets counted',data:keys.map(assetTotal),borderColor:'#34d399',backgroundColor:'#34d399',borderWidth:1,borderDash:[4,3],pointRadius:0,tension:0.25}]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+      plugins:{legend:{labels:{color:'#a1a1aa',boxWidth:10,font:{size:10}}},
+        tooltip:{callbacks:{label:i=>`${i.dataset.label}: ${CUR(i.parsed.y)}`}}},
+      scales:{x:{grid:{color:'#1c1c1f'},ticks:{color:'#71717a'}},
+        y:{grid:{color:'#1c1c1f'},ticks:{color:'#71717a',callback:v=>(Math.abs(v)>=1e6?(v/1e6).toFixed(1)+'M':'$'+(v/1000)+'k')}}}}});
+}
+
+// ---- controls ----
+document.querySelectorAll('[data-preset]').forEach(b=>b.addEventListener('click',()=>{
+  preset=b.dataset.preset;
+  document.querySelectorAll('[data-preset]').forEach(x=>{x.classList.toggle('on',x===b);x.classList.toggle('text-neutral-400',x!==b);});
+  render();
+}));
+document.querySelectorAll('[data-mode]').forEach(b=>b.addEventListener('click',()=>{
+  mode=b.dataset.mode;
+  document.querySelectorAll('[data-mode]').forEach(x=>{x.classList.toggle('on',x===b);x.classList.toggle('text-neutral-400',x!==b);});
+  render();
+}));
+document.getElementById('monthSel').addEventListener('change',e=>{currentMonth=e.target.value;render();});
+document.getElementById('addMonth').addEventListener('click',()=>{
+  const last=monthKeys().slice(-1)[0]||seedMonth; const k=nextMonth(last);
+  data.months[k]=clone(data.months[currentMonth]||{items:seed.items}); currentMonth=k; render(); saveNow(); setStatus('saved');
+});
+document.getElementById('delMonth').addEventListener('click',()=>{
+  if(monthKeys().length<=1){ setStatus('idle','Keep at least one month'); return; }
+  if(!confirm('Remove '+monthLabel(currentMonth)+'? This deletes that month’s data.')) return;
+  delete data.months[currentMonth];
+  currentMonth=monthKeys().slice(-1)[0];
+  render(); saveNow();
+});
+
+// ---- load ----
+async function loadFamilies(){
+  const r=await fetch('api/families'); const d=await r.json();
+  const sel=document.getElementById('familySel');
+  sel.innerHTML=d.families.map(f=>`<option value="${f.id}" ${f.active?'selected':''}>${f.name}</option>`).join('');
+  sel.onchange=()=>load(sel.value); load(sel.value||d.active);
+}
+async function load(family){
+  currentFamily=family||null;
+  const r=await fetch(url()); const d=await r.json();
+  seed=d.seed||{items:[]}; seedMonth=d.seed_month||'2026-06'; liab=d.liabilities||{by_month:{},fallback:0}; contrib=d.contributions||{};
+  const hasSaved=d.months&&Object.keys(d.months).length;
+  data.months=hasSaved?d.months:{[seedMonth]:clone(seed)};
+  currentMonth=monthKeys().slice(-1)[0];
+  const sel=document.getElementById('familySel');
+  document.getElementById('meta').textContent=`${sel.options[sel.selectedIndex]?.text||''} · ${monthKeys().length} month${monthKeys().length===1?'':'s'} · ${d.currency||'CAD'}`;
+  render();
+  if(!hasSaved){ await saveNow(); setStatus('seeded'); } else setStatus('idle');
+}
+loadFamilies();
+</script>
+</body>
+</html>

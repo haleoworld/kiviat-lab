@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Finances</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .fld:focus, .fld:focus-within { outline:none; border-color:#a78bfa; }
+    select.fld option { background:#161618; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-4">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Finances</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[35vw] truncate"></select>
+    </header>
+
+    <p class="text-xs text-neutral-500 mb-3 leading-relaxed">
+      Categorized monthly history of your income, spending, debt and savings.
+      Pre-filled from your snapshot — edit anything, and <span class="text-neutral-300">add a month</span> each
+      period to build the trend. Saves automatically.
+    </p>
+
+    <!-- Month bar -->
+    <div class="flex items-center justify-between gap-2 mb-4">
+      <div class="flex items-center gap-2 min-w-0">
+        <select id="monthSel" class="pill px-3 py-2 text-sm text-neutral-100 outline-none"></select>
+        <button id="addMonth" class="pill px-3 py-2 text-sm text-neutral-200 hover:text-white whitespace-nowrap">+ Add month</button>
+      </div>
+      <span id="saveStatus" class="text-[11px] text-neutral-500 shrink-0">…</span>
+    </div>
+
+    <div id="content" class="space-y-4"></div>
+
+    <footer class="mt-8 text-[11px] leading-relaxed text-neutral-600">
+      Living expenses exclude debt payments (those live under Debt) so totals aren't double-counted.
+      Net = Income − Living expenses − Debt payments.
+    </footer>
+  </div>
+
+<script>
+const CUR = (n) => (n<0?"-":"") + "$" + Math.abs(Math.round(n||0)).toLocaleString();
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+let data={months:{}}, seed=null, seedMonth=null, currentMonth=null, currentFamily=null, saveTimer=null, trendChart=null;
+const SECTIONS=[
+  {key:"income",   label:"Income",                color:"#34d399"},
+  {key:"expenses", label:"Living expenses",       color:"#f87171"},
+  {key:"debt",     label:"Debt",                  color:"#fbbf24", debt:true},
+  {key:"savings",  label:"Savings / investments", color:"#a78bfa"},
+];
+
+function monthLabel(k){ const [y,m]=k.split('-'); return `${MON[(+m)-1]||'?'} ${y}`; }
+function monthShort(k){ const [y,m]=k.split('-'); return `${MON[(+m)-1]||'?'} '${y.slice(2)}`; }
+function nextMonth(k){ let [y,m]=k.split('-').map(Number); m++; if(m>12){m=1;y++;} return `${y}-${String(m).padStart(2,'0')}`; }
+function monthKeys(){ return Object.keys(data.months).sort(); }
+function rows(key){ const mo=data.months[currentMonth]||{}; return mo[key]||(mo[key]=[]); }
+function total(key){ return rows(key).reduce((s,r)=>s+(+r.amount||0),0); }
+function debtBalance(){ return rows('debt').reduce((s,r)=>s+(+r.balance||0),0); }
+function debtPayment(){ return rows('debt').reduce((s,r)=>s+(+r.payment||0),0); }
+
+// ---- persistence ----
+function furl(){ return "api/finances"+(currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""); }
+function setStatus(s,msg){ const el=document.getElementById('saveStatus'); if(!el)return;
+  const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],
+    seeded:["Pre-filled from snapshot · saved ✓","text-emerald-400"],
+    error:["Couldn't save — retry on next edit","text-rose-400"],idle:["","text-neutral-500"]};
+  const [t,c]=map[s]||map.idle; el.textContent=msg||t; el.className=`text-[11px] shrink-0 ${c}`; }
+function scheduleSave(){ setStatus('saving'); clearTimeout(saveTimer); saveTimer=setTimeout(saveNow,700); }
+async function saveNow(){
+  try{ const r=await fetch(furl(),{method:"PUT",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({months:data.months})}); setStatus(r.ok?'saved':'error'); }
+  catch(e){ setStatus('error'); }
+}
+
+// ---- rendering ----
+function moneyField(dataAttr, val){
+  return `<div class="fld flex items-center px-2 py-1.5"><span class="text-neutral-500 text-xs mr-1">$</span>
+    <input data-f="${dataAttr}" inputmode="numeric" value="${Math.round(val||0).toLocaleString()}"
+      class="bg-transparent text-right num text-sm w-20 outline-none text-neutral-100"/></div>`;
+}
+function row(sec, r, i){
+  const del = `<button data-del="${sec.key}|${i}" aria-label="Remove" class="text-neutral-600 hover:text-rose-300 text-sm px-1 shrink-0">✕</button>`;
+  const cat = `<input data-f="${sec.key}|${i}|category" value="${(r.category||'').replace(/"/g,'&quot;')}" placeholder="Category"
+      class="fld flex-1 min-w-0 px-2 py-1.5 text-sm"/>`;
+  const bar = `<div class="h-1 rounded bg-neutral-800 mt-1.5"><div id="bar-${sec.key}-${i}" class="h-1 rounded" style="width:0%;background:${sec.color}"></div></div>`;
+  if(sec.debt){
+    return `<div class="py-2 border-b border-neutral-800 last:border-0">
+      <div class="flex items-center gap-2">${cat}${moneyField(`${sec.key}|${i}|balance`, r.balance)}${del}</div>
+      <div class="flex items-center gap-2 mt-1.5">
+        <div class="h-1 rounded bg-neutral-800 flex-1"><div id="bar-${sec.key}-${i}" class="h-1 rounded" style="width:0%;background:${sec.color}"></div></div>
+        <div class="fld flex items-center px-2 py-1 shrink-0"><span class="text-neutral-500 text-[11px] mr-1">pays $</span>
+          <input data-f="${sec.key}|${i}|payment" inputmode="numeric" value="${Math.round(r.payment||0).toLocaleString()}"
+            class="bg-transparent text-right num text-xs w-14 outline-none text-neutral-100"/><span class="text-neutral-500 text-[11px] ml-0.5">/mo</span></div>
+      </div></div>`;
+  }
+  return `<div class="py-2 border-b border-neutral-800 last:border-0">
+    <div class="flex items-center gap-2">${cat}${moneyField(`${sec.key}|${i}|amount`, r.amount)}${del}</div>
+    ${bar}</div>`;
+}
+function sectionCard(sec){
+  const list = rows(sec.key).map((r,i)=>row(sec,r,i)).join('') ||
+    `<p class="text-xs text-neutral-600 py-2">No line items yet.</p>`;
+  const totalEl = `<span id="tot-${sec.key}" class="num text-sm font-semibold" style="color:${sec.color}"></span>`;
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between mb-1">
+      <h2 class="font-semibold">${sec.label}</h2>${totalEl}
+    </div>
+    <div>${list}</div>
+    <button data-add="${sec.key}" class="text-[11px] text-neutral-400 hover:text-violet-300 mt-2">+ add line</button>
+  </div>`;
+}
+function summaryCard(){
+  const inc=total('income'), exp=total('expenses'), dp=debtPayment(), sav=total('savings');
+  const net=inc-exp-dp;
+  return `<div class="card p-4">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+      <div><div class="text-[11px] text-neutral-500">Income</div><div class="num text-lg font-semibold text-emerald-400">${CUR(inc)}</div></div>
+      <div><div class="text-[11px] text-neutral-500">Out (exp+debt)</div><div class="num text-lg font-semibold text-rose-400">${CUR(exp+dp)}</div></div>
+      <div><div class="text-[11px] text-neutral-500">Net</div><div class="num text-lg font-semibold ${net<0?'text-rose-400':'text-emerald-400'}">${CUR(net)}</div></div>
+      <div><div class="text-[11px] text-neutral-500">Saving</div><div class="num text-lg font-semibold text-violet-400">${CUR(sav)}</div></div>
+    </div></div>`;
+}
+function trendCard(){
+  if(monthKeys().length<2)
+    return `<div class="card p-4 text-xs text-neutral-500">Add another month (top-right) to see trends over time.</div>`;
+  return `<div class="card p-4">
+    <h2 class="font-semibold mb-1">Trends over time</h2>
+    <p class="text-[11px] text-neutral-500 mb-2">Monthly totals across ${monthKeys().length} months.</p>
+    <div style="height:200px"><canvas id="trendChart"></canvas></div>
+  </div>`;
+}
+
+function render(){
+  // month selector
+  const ms=document.getElementById('monthSel');
+  ms.innerHTML = monthKeys().slice().reverse().map(k=>`<option value="${k}" ${k===currentMonth?'selected':''}>${monthLabel(k)}</option>`).join('');
+  // body
+  document.getElementById('content').innerHTML =
+    summaryCard() + trendCard() + SECTIONS.map(sectionCard).join('');
+  // wire field inputs
+  document.querySelectorAll('[data-f]').forEach(inp=>{
+    inp.addEventListener('input', e=>{
+      const [key,i,field] = e.target.dataset.f.split('|');
+      const rec = rows(key)[+i]; if(!rec) return;
+      rec[field] = field==='category' ? e.target.value : (parseFloat(e.target.value.replace(/[^0-9.\-]/g,''))||0);
+      updateDerived(); scheduleSave();
+    });
+  });
+  document.querySelectorAll('[data-add]').forEach(b=>b.addEventListener('click',()=>{
+    const k=b.dataset.add; rows(k).push(k==='debt'?{category:'',balance:0,payment:0}:{category:'',amount:0});
+    render(); scheduleSave();
+  }));
+  document.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{
+    const [k,i]=b.dataset.del.split('|'); rows(k).splice(+i,1); render(); scheduleSave();
+  }));
+  updateDerived();
+  drawTrend();
+}
+
+// Update totals + breakdown bars + trend without rebuilding inputs (keeps focus).
+function updateDerived(){
+  for(const sec of SECTIONS){
+    const isDebt=sec.debt;
+    const tot = isDebt?debtBalance():total(sec.key);
+    const el=document.getElementById('tot-'+sec.key);
+    if(el) el.textContent = isDebt ? `${CUR(debtBalance())} owed · ${CUR(debtPayment())}/mo`
+                                   : `${CUR(tot)}/mo`;
+    const denom = tot || 1;
+    rows(sec.key).forEach((r,i)=>{
+      const bar=document.getElementById(`bar-${sec.key}-${i}`);
+      if(bar){ const v=isDebt?(+r.balance||0):(+r.amount||0); bar.style.width=Math.max(0,Math.min(100,100*v/denom))+'%'; }
+    });
+  }
+  // refresh summary numbers in place by re-rendering just the summary card
+  const sumHost=document.getElementById('content').firstElementChild;
+  if(sumHost) sumHost.outerHTML = summaryCard();
+  if(trendChart) drawTrend();
+}
+
+function drawTrend(){
+  const keys=monthKeys();
+  const cv=document.getElementById('trendChart');
+  if(!cv){ if(trendChart){trendChart.destroy();trendChart=null;} return; }
+  const series=k=>({
+    income:(data.months[k].income||[]).reduce((s,r)=>s+(+r.amount||0),0),
+    expenses:(data.months[k].expenses||[]).reduce((s,r)=>s+(+r.amount||0),0),
+    debt:(data.months[k].debt||[]).reduce((s,r)=>s+(+r.payment||0),0),
+    savings:(data.months[k].savings||[]).reduce((s,r)=>s+(+r.amount||0),0),
+  });
+  const S=keys.map(series);
+  const ds=(lbl,col,sel)=>({label:lbl,data:S.map(sel),borderColor:col,backgroundColor:col,
+    borderWidth:2,pointRadius:2,tension:0.25});
+  if(trendChart) trendChart.destroy();
+  trendChart=new Chart(cv,{type:'line',
+    data:{labels:keys.map(monthShort),datasets:[
+      ds('Income','#34d399',x=>x.income), ds('Living exp','#f87171',x=>x.expenses),
+      ds('Debt pmts','#fbbf24',x=>x.debt), ds('Savings','#a78bfa',x=>x.savings)]},
+    options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{labels:{color:'#a1a1aa',boxWidth:10,font:{size:10}}},
+        tooltip:{callbacks:{label:i=>`${i.dataset.label}: ${CUR(i.parsed.y)}`}}},
+      scales:{x:{grid:{color:'#1c1c1f'},ticks:{color:'#71717a'}},
+        y:{grid:{color:'#1c1c1f'},ticks:{color:'#71717a',callback:v=>'$'+(v>=1000?(v/1000)+'k':v)}}}}});
+}
+
+document.getElementById('monthSel').addEventListener('change',e=>{ currentMonth=e.target.value; render(); });
+document.getElementById('addMonth').addEventListener('click',()=>{
+  const last=monthKeys().slice(-1)[0]||seedMonth;
+  const k=nextMonth(last);
+  data.months[k]=clone(data.months[currentMonth]||seed);
+  currentMonth=k; render(); saveNow(); setStatus('saved');
+});
+
+// ---- load ----
+async function loadFamilies(){
+  const r=await fetch('api/families'); const d=await r.json();
+  const sel=document.getElementById('familySel');
+  sel.innerHTML=d.families.map(f=>`<option value="${f.id}" ${f.active?'selected':''}>${f.name}</option>`).join('');
+  sel.onchange=()=>load(sel.value);
+  load(sel.value||d.active);
+}
+async function load(family){
+  currentFamily=family||null;
+  const r=await fetch(furl()); const d=await r.json();
+  seed=d.seed||{income:[],expenses:[],debt:[],savings:[]}; seedMonth=d.seed_month||'2026-06';
+  const hasSaved = d.months && Object.keys(d.months).length;
+  data.months = hasSaved ? d.months : { [seedMonth]: clone(seed) };
+  currentMonth = monthKeys().slice(-1)[0];
+  const sel=document.getElementById('familySel');
+  document.getElementById('meta').textContent =
+    `${sel.options[sel.selectedIndex]?.text||''} · ${monthKeys().length} month${monthKeys().length===1?'':'s'} · ${d.currency||'CAD'}`;
+  render();
+  if(!hasSaved){ await saveNow(); setStatus('seeded'); } else setStatus('idle');
+}
+loadFamilies();
+</script>
+</body>
+</html>

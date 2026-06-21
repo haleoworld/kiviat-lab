@@ -82,6 +82,14 @@ def load_members(family_id: str) -> list[dict[str, Any]]:
     return data.get("members", [])
 
 
+def save_members(family_id: str, members: list[dict[str, Any]]) -> None:
+    """Overwrite this family's members.yaml with the given list."""
+    mfile = paths.members_file(family_id)
+    mfile.parent.mkdir(parents=True, exist_ok=True)
+    with open(mfile, "w") as f:
+        yaml.safe_dump({"members": members}, f, sort_keys=False, allow_unicode=True)
+
+
 def resolve_family(family_arg: str | None) -> str:
     """Pick the family to operate on: explicit arg > active_family > the only one."""
     families = paths.list_families()

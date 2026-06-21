@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Allocation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .fld:focus, .fld:focus-within { outline:none; border-color:#a78bfa; }
+    input[type=range]{ -webkit-appearance:none; appearance:none; height:4px; background:#2e2e32; border-radius:9999px; }
+    input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:#a78bfa; border:2px solid #0a0a0b; cursor:pointer; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-4">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Allocation</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[35vw] truncate"></select>
+    </header>
+
+    <p class="text-xs text-neutral-500 mb-3 leading-relaxed">
+      Tune the <span class="text-neutral-300">% you'd hold</span> in each asset class and see the blended
+      target return and risk it produces — compared with your current mix. Per-class figures are researched
+      historical averages; edit them to your own assumptions. Saves automatically.
+    </p>
+
+    <div id="content" class="space-y-4"><div class="card p-6 text-neutral-400">Loading…</div></div>
+
+    <footer class="mt-8 text-[11px] leading-relaxed text-neutral-600">
+      Volatility &amp; drawdown are <span class="text-neutral-500">diversification-adjusted</span> using default
+      correlations between classes (gold/bonds/cash cushion equity crashes) — the "undiv" figures are the naive
+      weighted average. Expected return is the weighted average of annualized returns; your realized CAGR runs a bit
+      lower from volatility drag. Drawdown is scaled by the same diversification benefit as σ — a rough estimate, not
+      a backtested figure. Researched numbers are long-run historical, not a forecast. Informed, not advised.
+    </footer>
+  </div>
+
+<script>
+const PCT=(n)=>(n>=0?"":"-")+Math.abs(n).toFixed(1)+"%";
+const RISKC={1:"text-emerald-400",2:"text-emerald-300",3:"text-amber-400",4:"text-orange-400",5:"text-rose-400"};
+const COLORS={cash:"#737373",tbill:"#a3a3a3",bonds:"#818cf8",real_estate:"#60a5fa",equities_dividend:"#34d399",gold:"#fbbf24",
+  equities_uncat:"#22d3ee",equities_growth:"#a78bfa",equities_trade:"#f472b6",crypto:"#f87171"};
+
+let classes=[], targets={}, mixes=[], currentFamily=null, saveTimer=null, donut=null, frontChart=null, borrow=4;
+
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function clsByKey(k){return classes.find(c=>c.key===k);}
+// Leverage amplifies return/σ/drawdown on the equity you hold:
+//   return = L×r − (L−1)×borrow ;  σ = L×σ ;  drawdown = max(−100, L×dd)
+function eff(c){ const L=+c.lev||1; return {
+  ret: L*c.ret - (L-1)*borrow, vol: L*c.vol, maxdd: Math.max(-100, L*c.maxdd) }; }
+function blended(weights){
+  let sum=0,ret=0,vol=0,dd=0,risk=0;
+  classes.forEach(c=>{ sum+=(+weights[c.key]||0); });
+  const d=sum||1;
+  classes.forEach(c=>{ const w=(+weights[c.key]||0)/d; const e=eff(c);
+    ret+=w*e.ret; vol+=w*e.vol; dd+=w*e.maxdd; risk+=w*c.risk; });
+  return {sum,ret,vol,dd,risk};
+}
+function currentWeights(){const o={};classes.forEach(c=>o[c.key]=c.current_pct);return o;}
+
+// Default correlations between classes (the "diversification" that the weighted
+// average ignores). Rules-based so it's easy to read/maintain.
+function corr(a,b){
+  if(a===b) return 1;
+  const eq=x=>x.startsWith('equities');
+  const other=x=> a===x?b:a;
+  if(a==='cash'||b==='cash'||a==='tbill'||b==='tbill') return 0;   // cash/T-bills ~uncorrelated
+  if(a==='bonds'||b==='bonds'){ const o=other('bonds'); return eq(o)?0.15:(o==='crypto'?0:0.2); }
+  if(a==='gold'||b==='gold'){ const o=other('gold'); return eq(o)?-0.05:(o==='crypto'?0.2:0.1); } // gold cushions stocks
+  if(a==='crypto'||b==='crypto'){ return eq(other('crypto'))?0.4:0.3; }
+  if(a==='real_estate'||b==='real_estate'){ return eq(other('real_estate'))?0.55:0.2; }
+  if(eq(a)&&eq(b)) return 0.85;                               // equity sub-styles move together
+  return 0.3;
+}
+// True portfolio σ with correlations: √(ΣΣ wᵢwⱼσᵢσⱼρᵢⱼ) — lower than the weighted average.
+function portfolioVol(weights){
+  const tot=classes.reduce((s,c)=>s+(+weights[c.key]||0),0)||1;
+  let v=0;
+  classes.forEach(ci=>classes.forEach(cj=>{
+    const wi=(+weights[ci.key]||0)/tot, wj=(+weights[cj.key]||0)/tot;
+    v += wi*wj*eff(ci).vol*eff(cj).vol*corr(ci.key,cj.key);
+  }));
+  return Math.sqrt(Math.max(0,v));
+}
+// Diversified estimates: drawdown scaled by the same diversification benefit as σ.
+function metrics(weights){
+  const b=blended(weights);
+  const dvol=portfolioVol(weights);
+  const ratio=b.vol>0?dvol/b.vol:1;
+  // Risk score now scales with the DIVERSIFIED σ (≈6% per level, 1–5), so it moves
+  // with σ/drawdown instead of being a separate ordinal class-tier average.
+  const riskScore=Math.max(1,Math.min(5, 1+dvol/6));
+  return {...b, dvol, ddiv:b.dd*ratio, ratio, riskScore};
+}
+
+// ---- persistence ----
+function url(){return "api/allocation"+(currentFamily?`?family=${encodeURIComponent(currentFamily)}`:"");}
+function setStatus(s,msg){const el=document.getElementById('saveStatus');if(!el)return;
+  const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],
+    error:["Couldn't save","text-rose-400"],idle:["","text-neutral-500"]};
+  const[t,c]=map[s]||map.idle;el.textContent=msg||t;el.className=`text-[11px] ${c}`;}
+function statsPayload(){const o={};classes.forEach(c=>o[c.key]={ret:c.ret,vol:c.vol,maxdd:c.maxdd,lev:c.lev});return o;}
+function scheduleSave(){setStatus('saving');clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,700);}
+async function saveNow(stats){try{const r=await fetch(url(),{method:"PUT",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({targets,borrow,mixes,stats:stats===undefined?statsPayload():stats})});setStatus(r.ok?'saved':'error');}catch(e){setStatus('error');}}
+
+// ---- saved mixes (scenarios) ----
+function saveMix(){
+  const name=(prompt("Name this mix:", `Mix ${mixes.length+1}`)||'').trim();
+  if(!name) return;
+  const snap=JSON.parse(JSON.stringify(targets));
+  const ex=mixes.findIndex(m=>m.name===name);
+  if(ex>=0){ if(!confirm(`A mix named "${name}" exists — overwrite it?`)) return; mixes[ex].targets=snap; }
+  else mixes.push({name, targets:snap});
+  render(); scheduleSave();
+}
+function loadMix(i){
+  const mx=mixes[i]; if(!mx) return;
+  classes.forEach(c=>targets[c.key]=(mx.targets||{})[c.key]||0);
+  render(); scheduleSave();
+}
+function overwriteMix(i){
+  const mx=mixes[i]; if(!mx) return;
+  if(!confirm(`Save the current mix into "${mx.name}" (overwrite it)?`)) return;
+  mx.targets=JSON.parse(JSON.stringify(targets)); render(); scheduleSave();
+}
+function renameMix(i){
+  const mx=mixes[i]; if(!mx) return;
+  const name=(prompt("Rename mix:", mx.name)||'').trim(); if(!name) return;
+  mx.name=name; render(); scheduleSave();
+}
+function delMix(i){
+  const mx=mixes[i]; if(!mx) return;
+  if(!confirm(`Delete saved mix "${mx.name}"?`)) return;
+  mixes.splice(i,1); render(); scheduleSave();
+}
+
+// ---- render ----
+function summaryCard(){
+  const t=metrics(targets), c=metrics(currentWeights());
+  const cell=(lbl,tv,cv,col,extra)=>`<div>
+    <div class="text-[11px] text-neutral-500">${lbl}</div>
+    <div class="num text-xl font-semibold ${col||''}">${tv}</div>
+    <div class="text-[11px] text-neutral-600">now ${cv}${extra?` · ${extra}`:''}</div></div>`;
+  return `<div class="card p-4">
+    <h2 class="font-semibold mb-2">Target portfolio</h2>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+      ${cell("Expected return", PCT(t.ret), PCT(c.ret), "text-emerald-400")}
+      ${cell("Volatility (σ)", PCT(t.dvol), PCT(c.dvol), "text-amber-400", `undiv ${PCT(t.vol)}`)}
+      ${cell("Est. max drawdown", PCT(t.ddiv), PCT(c.ddiv), "text-rose-400", `undiv ${PCT(t.dd)}`)}
+      ${cell("Risk score", t.riskScore.toFixed(1)+"/5", c.riskScore.toFixed(1)+"/5", RISKC[Math.round(t.riskScore)]||'')}
+    </div>
+    <p class="text-[10px] text-neutral-600 mt-2 text-center">σ &amp; drawdown are diversification-adjusted (correlations); "undiv" = the simple weighted average. Risk score now scales with the diversified σ.</p>
+  </div>`;
+}
+// Classic model portfolios (approximate long-run return / volatility / worst drawdown).
+const POPULAR=[
+  {name:"60 / 40 balanced",      mix:"60% stocks · 40% bonds",                 ret:8,   vol:10, dd:-30},
+  {name:"Bogleheads 3-fund",     mix:"~70% stocks · 30% bonds (US+intl)",      ret:8,   vol:11, dd:-35},
+  {name:"Aggressive 80 / 20",    mix:"80% stocks · 20% bonds",                 ret:9,   vol:13, dd:-40},
+  {name:"Buffett 90 / 10",       mix:"90% S&P 500 · 10% T-bills",              ret:10,  vol:16, dd:-50},
+  {name:"All-Weather (Dalio)",   mix:"30% stk · 55% bonds · 15% gold/cmdty",   ret:7,   vol:8,  dd:-20},
+  {name:"Permanent (Browne)",    mix:"25% each: stocks/bonds/cash/gold",       ret:6,   vol:7,  dd:-15},
+  {name:"Age-based (~75/25)",    mix:"75% stocks · 25% bonds (age 39)",        ret:8.5, vol:12, dd:-35},
+];
+function popRow(m, you){
+  return `<div class="flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg border-b border-neutral-800 last:border-0 ${you?'bg-violet-500/10':''}">
+    <div class="min-w-0">
+      <div class="text-sm ${you?'font-semibold text-violet-200':''} truncate">${m.name}</div>
+      <div class="text-[10px] text-neutral-600 truncate">${m.mix}</div>
+    </div>
+    <div class="num text-[11px] text-right shrink-0 whitespace-nowrap">
+      <span class="text-emerald-400">${Math.round(m.ret)}%</span> <span class="text-neutral-700">·</span>
+      <span class="text-amber-400">σ${Math.round(m.vol)}</span> <span class="text-neutral-700">·</span>
+      <span class="text-rose-400">${Math.round(m.dd)}%</span>
+    </div></div>`;
+}
+function popularCard(){
+  const t=metrics(targets);
+  const you={name:"Your target mix", mix:`risk ${t.riskScore.toFixed(1)}/5 · ${Math.round(t.sum)}% allocated`, ret:t.ret, vol:t.dvol, dd:t.ddiv};
+  return `<div class="card p-4" id="popularCard">
+    <h2 class="font-semibold mb-1">Vs. popular allocations</h2>
+    <p class="text-[11px] text-neutral-500 mb-2">Your mix against classic models —
+      <span class="text-emerald-400">return</span> · <span class="text-amber-400">σ</span> · <span class="text-rose-400">max drawdown</span>.
+      Model figures are approximate long-run history.</p>
+    ${popRow(you, true)}${POPULAR.map(m=>popRow(m,false)).join('')}
+  </div>`;
+}
+function savedMixesCard(){
+  const rows = mixes.length ? mixes.map((mx,i)=>
+    `<div class="flex items-center justify-between gap-2 py-2 border-b border-neutral-800 last:border-0">
+      <div class="min-w-0">
+        <div class="text-sm truncate">${esc(mx.name)}</div>
+        <div id="mixstat-${i}" class="num text-[11px] text-neutral-500"></div>
+      </div>
+      <div class="flex flex-col items-end gap-1 shrink-0">
+        <button data-load="${i}" class="pill px-3 py-1 text-[11px] text-violet-200 hover:text-white">Load</button>
+        <div class="flex items-center gap-2 text-[10px] text-neutral-500">
+          <button data-overwrite="${i}" class="hover:text-amber-300">overwrite</button>
+          <button data-rename="${i}" class="hover:text-violet-300">rename</button>
+          <button data-delmix="${i}" class="hover:text-rose-300">delete</button>
+        </div>
+      </div></div>`).join('')
+    : `<p class="text-xs text-neutral-600 py-1">No saved mixes yet — tune your mix, then tap "Save current".</p>`;
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between mb-1"><h2 class="font-semibold">Saved mixes</h2>
+      <button id="saveMixBtn" class="pill px-3 py-1 text-[11px] text-emerald-200 hover:text-white">+ Save current</button></div>
+    <p class="text-[11px] text-neutral-500 mb-2">Save scenarios and load any back later. Figures use your current assumptions.</p>
+    ${rows}
+  </div>`;
+}
+function donutCard(){
+  return `<div class="card p-4">
+    <h2 class="font-semibold mb-2">Target mix</h2>
+    <div class="flex flex-col sm:flex-row gap-4 items-center">
+      <div class="w-40 h-40 shrink-0"><canvas id="allocPie"></canvas></div>
+      <div id="legend" class="flex-1 w-full text-xs"></div>
+    </div></div>`;
+}
+function frontierCard(){
+  return `<div class="card p-4">
+    <h2 class="font-semibold mb-1">Risk vs return</h2>
+    <p class="text-[11px] text-neutral-500 mb-2">Each asset class (dots) and your portfolios (◆ target · ● current), by volatility vs expected return. Up-and-to-the-left is better return per unit of risk.</p>
+    <div style="height:240px"><canvas id="frontier"></canvas></div>
+  </div>`;
+}
+function drawFrontier(){
+  const cv=document.getElementById('frontier'); if(!cv)return;
+  const mt=metrics(targets), mc=metrics(currentWeights());
+  if(frontChart)frontChart.destroy();
+  frontChart=new Chart(cv,{type:'scatter',
+    data:{datasets:[
+      {label:'Asset class', data:classes.map(c=>({x:eff(c).vol,y:eff(c).ret,k:c.label})),
+        pointBackgroundColor:classes.map(c=>COLORS[c.key]||'#888'), pointRadius:5, pointHoverRadius:7},
+      {label:'Your target', data:[{x:mt.dvol,y:mt.ret,k:'Your target'}],
+        pointBackgroundColor:'#a78bfa', pointBorderColor:'#fff', pointBorderWidth:2, pointRadius:9, pointStyle:'rectRot'},
+      {label:'Current', data:[{x:mc.dvol,y:mc.ret,k:'Current'}], pointBackgroundColor:'#e5e5e5', pointRadius:6},
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#a1a1aa',boxWidth:8,font:{size:10}}},
+        tooltip:{callbacks:{label:i=>`${i.raw.k}: σ ${i.raw.x.toFixed(0)}% · return ${i.raw.y.toFixed(0)}%`}}},
+      scales:{x:{title:{display:true,text:'Volatility (σ) %',color:'#52525b',font:{size:11}},grid:{color:'#1c1c1f'},ticks:{color:'#71717a'},min:0},
+        y:{title:{display:true,text:'Return %',color:'#52525b',font:{size:11}},grid:{color:'#1c1c1f'},ticks:{color:'#71717a'}}}}});
+}
+function mixRow(c){
+  const gap=(targets[c.key]||0)-c.current_pct;
+  return `<div class="py-2.5 border-b border-neutral-800 last:border-0">
+    <div class="flex items-center justify-between gap-2">
+      <span class="text-sm min-w-0 truncate">${c.label} <span class="text-[10px] ${RISKC[c.risk]}">·R${c.risk}</span></span>
+      <div class="flex items-center gap-2 shrink-0">
+        <span class="text-[11px] text-neutral-500">now ${c.current_pct}%</span>
+        <span id="gap-${c.key}" class="text-[11px] num ${gap>=0?'text-emerald-400/80':'text-rose-400/80'}">${gap>=0?'+':''}${gap.toFixed(0)}pp</span>
+        <div class="fld flex items-center px-2 py-1"><input data-t="${c.key}" inputmode="decimal" value="${(targets[c.key]||0)}" class="bg-transparent text-right num text-sm w-10 outline-none text-neutral-100"/><span class="text-neutral-500 text-xs">%</span></div>
+      </div>
+    </div>
+    <input data-tr="${c.key}" type="range" min="0" max="100" step="1" value="${targets[c.key]||0}" class="w-full mt-1.5"/>
+  </div>`;
+}
+function mixCard(){
+  // Persistent sum + Normalize row lives here (always shown → no page jump).
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between gap-2 mb-1">
+      <h2 class="font-semibold">Your target mix</h2>
+      <div class="flex items-center gap-2 shrink-0">
+        <span id="mixSum" class="num text-[11px]"></span>
+        <button id="normBtn" class="pill px-3 py-1 text-[11px] text-violet-200 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed">Normalize</button>
+      </div>
+    </div>
+    <div class="flex items-center justify-between gap-2 mb-2">
+      <p class="text-[11px] text-neutral-500">Set the % for each class. "pp" = points above/below your current.</p>
+      <button id="matchBtn" class="text-[11px] text-neutral-400 hover:text-violet-300 shrink-0">match current</button>
+    </div>
+    ${classes.map(mixRow).join('')}
+  </div>`;
+}
+function statRow(c){
+  const f=(field,val,suf)=>`<div class="fld flex items-center px-2 py-1 flex-1"><input data-s="${c.key}|${field}" inputmode="decimal" value="${val}" class="bg-transparent num text-xs w-full outline-none text-neutral-100"/><span class="text-neutral-500 text-[10px] ml-0.5">${suf}</span></div>`;
+  return `<div class="py-2 border-b border-neutral-800 last:border-0">
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-sm">${c.label} <span class="text-[10px] ${RISKC[c.risk]}">risk ${c.risk}/5</span></span>
+      <div class="fld flex items-center px-2 py-0.5"><span class="text-neutral-500 text-[10px] mr-1">lev</span><input data-s="${c.key}|lev" inputmode="decimal" value="${+c.lev||1}" class="bg-transparent num text-xs w-8 text-right outline-none text-neutral-100"/><span class="text-neutral-500 text-[10px] ml-0.5">×</span></div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-[10px] text-neutral-500 w-10">return</span>${f('ret',c.ret,'%')}
+      <span class="text-[10px] text-neutral-500 w-6">σ</span>${f('vol',c.vol,'%')}
+      <span class="text-[10px] text-neutral-500 w-12">max DD</span>${f('maxdd',c.maxdd,'%')}
+    </div>
+    <div id="lev-${c.key}" class="text-[11px] text-blue-300/80 mt-1"></div>
+  </div>`;
+}
+function statsCard(){
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between mb-1"><h2 class="font-semibold">Asset-class assumptions</h2>
+      <button id="resetStats" class="text-[11px] text-neutral-400 hover:text-violet-300">reset to researched</button></div>
+    <p class="text-[11px] text-neutral-500 mb-2">Researched long-run historical figures — edit to your own view. Annualized return / volatility (σ) / worst historical drawdown.
+      <span class="text-neutral-400">Leverage (×)</span> amplifies all three on your equity: return = lev×return − borrow×debt, σ = lev×σ, drawdown capped at −100%.</p>
+    <div class="flex items-center gap-2 mb-3 text-[11px] text-neutral-400"><span>Borrowing cost for leverage</span>
+      <div class="fld flex items-center px-2 py-1"><input id="borrowFld" inputmode="decimal" value="${borrow}" class="bg-transparent num text-xs w-10 text-right outline-none text-neutral-100"/><span class="text-neutral-500 ml-0.5">%</span></div></div>
+    ${classes.map(statRow).join('')}
+  </div>`;
+}
+
+function render(){
+  document.getElementById('content').innerHTML =
+    `<div class="flex items-center justify-end mb-1"><span id="saveStatus" class="text-[11px] text-neutral-500"></span></div>`
+    + summaryCard()+popularCard()+frontierCard()+donutCard()+mixCard()+savedMixesCard()+statsCard();
+  // wire target inputs
+  document.querySelectorAll('[data-t]').forEach(inp=>inp.addEventListener('input',e=>{
+    const k=e.target.dataset.t; targets[k]=clamp(parseFloat(e.target.value.replace(/[^0-9.\-]/g,''))||0);
+    const r=document.querySelector(`[data-tr="${k}"]`); if(r)r.value=targets[k];
+    updateDerived(); scheduleSave();
+  }));
+  document.querySelectorAll('[data-tr]').forEach(inp=>inp.addEventListener('input',e=>{
+    const k=e.target.dataset.tr; targets[k]=parseFloat(e.target.value)||0;
+    const n=document.querySelector(`[data-t="${k}"]`); if(n)n.value=targets[k];
+    updateDerived(); scheduleSave();
+  }));
+  document.querySelectorAll('[data-s]').forEach(inp=>inp.addEventListener('input',e=>{
+    const [k,field]=e.target.dataset.s.split('|'); const c=clsByKey(k); if(!c)return;
+    c[field]=parseFloat(e.target.value.replace(/[^0-9.\-]/g,''))||0;
+    updateDerived(); scheduleSave();
+  }));
+  const bf=document.getElementById('borrowFld'); if(bf)bf.addEventListener('input',e=>{ borrow=parseFloat(e.target.value.replace(/[^0-9.\-]/g,''))||0; updateDerived(); scheduleSave(); });
+  const mb=document.getElementById('matchBtn'); if(mb)mb.onclick=()=>{ classes.forEach(c=>targets[c.key]=c.current_pct); render(); scheduleSave(); };
+  const rs=document.getElementById('resetStats'); if(rs)rs.onclick=async()=>{ await saveNow({}); await load(currentFamily); };
+  const smb=document.getElementById('saveMixBtn'); if(smb)smb.onclick=saveMix;
+  document.querySelectorAll('[data-load]').forEach(b=>b.onclick=()=>loadMix(+b.dataset.load));
+  document.querySelectorAll('[data-overwrite]').forEach(b=>b.onclick=()=>overwriteMix(+b.dataset.overwrite));
+  document.querySelectorAll('[data-rename]').forEach(b=>b.onclick=()=>renameMix(+b.dataset.rename));
+  document.querySelectorAll('[data-delmix]').forEach(b=>b.onclick=()=>delMix(+b.dataset.delmix));
+  wireNorm();
+  updateDerived();
+}
+function clamp(v){return Math.max(0,Math.min(100,v));}
+function wireNorm(){ const nb=document.getElementById('normBtn'); if(nb)nb.onclick=()=>{
+  const s=blended(targets).sum||1; classes.forEach(c=>targets[c.key]=Math.round((targets[c.key]||0)*100/s));
+  render(); scheduleSave(); }; }
+
+function updateDerived(){
+  // summary card re-render (no inputs there except normBtn)
+  const host=document.getElementById('content');
+  const sumNode=host.children[1]; if(sumNode) sumNode.outerHTML=summaryCard();
+  const pc=document.getElementById('popularCard'); if(pc) pc.outerHTML=popularCard();
+  wireNorm();
+  // persistent sum + normalize state (in the Target mix header)
+  const sum=blended(targets).sum, on100=Math.round(sum)===100;
+  const ms=document.getElementById('mixSum'); if(ms){ ms.textContent=`sums to ${sum.toFixed(0)}%`; ms.className=`num text-[11px] ${on100?'text-emerald-400':'text-amber-400'}`; }
+  const nb=document.getElementById('normBtn'); if(nb) nb.disabled=on100;
+  // gaps
+  classes.forEach(c=>{ const g=(targets[c.key]||0)-c.current_pct; const el=document.getElementById('gap-'+c.key);
+    if(el){ el.textContent=(g>=0?'+':'')+g.toFixed(0)+'pp'; el.className=`text-[11px] num ${g>=0?'text-emerald-400/80':'text-rose-400/80'}`; } });
+  // leverage hints
+  classes.forEach(c=>{ const el=document.getElementById('lev-'+c.key); if(!el)return; const L=+c.lev||1; const e=eff(c);
+    el.textContent = Math.abs(L-1)>0.05 ? `leveraged ${L}× → return ${e.ret.toFixed(0)}% · σ ${e.vol.toFixed(0)}% · max DD ${e.maxdd.toFixed(0)}%` : ''; });
+  // saved-mix stats (recompute under current assumptions)
+  mixes.forEach((mx,i)=>{ const el=document.getElementById('mixstat-'+i); if(!el)return; const m=metrics(mx.targets);
+    el.innerHTML=`<span class="text-emerald-400">${m.ret.toFixed(1)}%</span> · <span class="text-amber-400">σ${m.dvol.toFixed(0)}</span> · <span class="text-rose-400">${m.ddiv.toFixed(0)}%</span>`; });
+  drawDonut(); drawFrontier();
+}
+function drawDonut(){
+  const cv=document.getElementById('allocPie'); if(!cv)return;
+  const live=classes.filter(c=>(targets[c.key]||0)>0);          // chart: only non-zero slices
+  const total=classes.reduce((s,c)=>s+(targets[c.key]||0),0)||1;
+  if(donut)donut.destroy();
+  donut=new Chart(cv,{type:'doughnut',
+    data:{labels:live.map(c=>c.label),datasets:[{data:live.map(c=>targets[c.key]||0),
+      backgroundColor:live.map(c=>COLORS[c.key]||'#888'),borderColor:'#0a0a0b',borderWidth:2}]},
+    options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:i=>`${i.label}: ${(100*i.parsed/total).toFixed(0)}%`}}},cutout:'62%',responsive:true,maintainAspectRatio:true}});
+  // legend: ALL classes stay listed, even at 0% (dimmed), so the list never reshuffles away
+  document.getElementById('legend').innerHTML = classes.slice().sort((a,b)=>(targets[b.key]||0)-(targets[a.key]||0)).map(c=>{
+    const v=targets[c.key]||0;
+    return `<div class="flex items-center justify-between py-1 border-b border-neutral-800 last:border-0 ${v<=0?'opacity-45':''}">
+      <span class="flex items-center gap-2"><span style="width:10px;height:10px;border-radius:2px;background:${COLORS[c.key]}" class="inline-block"></span>${c.label}</span>
+      <span class="num">${Math.round(100*v/total)}%</span></div>`;
+  }).join('');
+}
+
+// ---- load ----
+async function loadFamilies(){
+  const r=await fetch('api/families'); const d=await r.json();
+  const sel=document.getElementById('familySel');
+  sel.innerHTML=d.families.map(f=>`<option value="${f.id}" ${f.active?'selected':''}>${f.name}</option>`).join('');
+  sel.onchange=()=>load(sel.value); load(sel.value||d.active);
+}
+async function load(family){
+  currentFamily=family||null;
+  const r=await fetch(url()); const d=await r.json();
+  classes=d.classes||[];
+  borrow=(d.borrow!=null)?d.borrow:4;
+  mixes=d.mixes||[];
+  targets={};
+  if(d.saved_targets){ classes.forEach(c=>targets[c.key]=d.saved_targets[c.key]||0); }
+  else { classes.forEach(c=>targets[c.key]=c.current_pct); }   // start from current mix
+  const sel=document.getElementById('familySel');
+  document.getElementById('meta').textContent=`${sel.options[sel.selectedIndex]?.text||''} · ${d.saved_targets?'saved plan':'from current mix'} · ${d.currency||'CAD'}`;
+  render();
+  setStatus('idle');
+}
+loadFamilies();
+</script>
+</body>
+</html>

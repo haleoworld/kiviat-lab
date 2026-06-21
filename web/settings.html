@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Settings</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .fld:focus { outline:none; border-color:#a78bfa; }
+    select.fld option { background:#161618; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-5">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Settings</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
+      </div>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[35vw] truncate"></select>
+    </header>
+
+    <section>
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="font-semibold">Family members</h2>
+        <span id="saveStatus" class="text-[11px] text-neutral-500">…</span>
+      </div>
+      <p class="text-xs text-neutral-500 mb-3 leading-relaxed">
+        The <span class="text-neutral-300">main person</span> drives age-based calculations
+        (e.g. your retirement timeline). Birthdays are used to compute ages automatically.
+      </p>
+      <div id="memberList" class="space-y-3"></div>
+      <button id="addBtn" class="pill px-4 py-2 text-sm text-neutral-200 hover:text-white mt-3">+ Add member</button>
+    </section>
+
+    <section class="mt-9">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="font-semibold">Corporation</h2>
+        <span id="corpStatus" class="text-[11px] text-neutral-500"></span>
+      </div>
+      <p class="text-xs text-neutral-500 mb-3 leading-relaxed">
+        Your <span class="text-neutral-300">fiscal year</span> drives the bookkeeping periods —
+        fiscal-year labels on transactions, HST periods, and the accountant export. It's labelled
+        by the year it <em>ends</em>.
+      </p>
+      <div class="card p-4">
+        <div class="text-[11px] text-neutral-500 mb-1">Fiscal year starts</div>
+        <div class="flex items-center gap-2">
+          <select id="fyMonth" class="fld px-3 py-2 text-sm flex-1"></select>
+          <select id="fyDay" class="fld px-3 py-2 text-sm w-24"></select>
+        </div>
+        <div id="fyDerived" class="text-[12px] text-neutral-400 mt-3 leading-relaxed"></div>
+        <div class="mt-4 pt-4 border-t border-neutral-800">
+          <div class="text-[11px] text-neutral-500 mb-2">Accounts <span class="text-neutral-600">— tap to archive a cancelled card (kept for past years, hidden from new imports)</span></div>
+          <div id="acctChips" class="flex flex-wrap gap-2"></div>
+        </div>
+        <div class="mt-4 pt-4 border-t border-neutral-800">
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-[11px] text-neutral-500">Category tax <span class="text-neutral-600">— auto-fills HST on receipts with no itemized tax (backs it out of the total)</span></div>
+            <span id="catTaxStatus" class="text-[11px] text-neutral-500"></span>
+          </div>
+          <div id="catTaxList" class="space-y-1.5"></div>
+          <button id="reestBtn" class="mt-3 pill px-3 py-1.5 text-[12px] text-neutral-200 hover:text-white">↻ Re-estimate existing receipts</button>
+          <span id="reestStatus" class="text-[11px] ml-2 text-neutral-500"></span>
+        </div>
+      </div>
+    </section>
+
+    <footer class="mt-10 text-[11px] leading-relaxed text-neutral-600">
+      Changes save automatically to this household. Ages are derived from birthdays at view time.
+    </footer>
+  </div>
+
+<script>
+let members = [], currentFamily = null, saveTimer = null;
+const RELATIONSHIPS = ["self","spouse","partner","child","parent","other"];
+
+function ageFromBirthday(bday){
+  if(!bday) return null;
+  const b = new Date(bday + "T00:00:00");
+  if(isNaN(b)) return null;
+  const t = new Date();
+  let a = t.getFullYear() - b.getFullYear();
+  const m = t.getMonth() - b.getMonth();
+  if(m < 0 || (m === 0 && t.getDate() < b.getDate())) a--;
+  return a;
+}
+
+function slugId(name){
+  const base = (name||"member").toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"") || "member";
+  return base + "-" + Math.random().toString(36).slice(2,6);
+}
+
+function setSaveStatus(state, msg){
+  const el = document.getElementById("saveStatus"); if(!el) return;
+  const map = { saving:["Saving…","text-amber-400"], saved:["Saved ✓","text-emerald-400"],
+                error:["Couldn't save — retry on next edit","text-rose-400"], idle:["","text-neutral-500"] };
+  const [t,c] = map[state]||map.idle; el.textContent = msg||t; el.className = `text-[11px] ${c}`;
+}
+function membersURL(){ const q = currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; return "api/members"+q; }
+function scheduleSave(){ setSaveStatus("saving"); clearTimeout(saveTimer); saveTimer = setTimeout(saveNow, 700); }
+async function saveNow(){
+  try{
+    const r = await fetch(membersURL(), {method:"PUT", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({members})});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const d = await r.json(); members = d.members || members;   // server normalizes (single primary)
+    syncPrimaryRadios();
+    setSaveStatus("saved");
+  }catch(e){ setSaveStatus("error"); }
+}
+
+// Keep primary radios in sync after the server enforces a single main person.
+function syncPrimaryRadios(){
+  members.forEach((m,i)=>{ const r=document.querySelector(`[data-primary="${i}"]`); if(r) r.checked=!!m.primary; });
+}
+
+function memberCard(m, i){
+  const age = ageFromBirthday(m.birthday);
+  const opts = RELATIONSHIPS.map(r=>`<option value="${r}" ${m.relationship===r?"selected":""}>${r[0].toUpperCase()+r.slice(1)}</option>`).join("");
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between gap-2 mb-3">
+      <label class="flex items-center gap-2 text-sm cursor-pointer">
+        <input type="radio" name="primary" data-primary="${i}" ${m.primary?"checked":""} class="accent-violet-500" />
+        <span class="${m.primary?"text-violet-300":"text-neutral-400"}">Main person</span>
+      </label>
+      <button data-del="${i}" class="text-[11px] text-rose-400/80 hover:text-rose-300">Remove</button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div>
+        <div class="text-[11px] text-neutral-500 mb-1">Name</div>
+        <input data-name="${i}" type="text" value="${(m.name||"").replace(/"/g,'&quot;')}" placeholder="Full name"
+               class="fld w-full px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <div class="text-[11px] text-neutral-500 mb-1">Relationship</div>
+        <select data-rel="${i}" class="fld w-full px-3 py-2 text-sm">${opts}</select>
+      </div>
+      <div>
+        <div class="text-[11px] text-neutral-500 mb-1">Birthday</div>
+        <input data-bday="${i}" type="date" value="${m.birthday||""}" class="fld w-full px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <div class="text-[11px] text-neutral-500 mb-1">Age</div>
+        <div data-age="${i}" class="num text-sm px-3 py-2 text-neutral-300">${age!=null?age+" yrs":"—"}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function render(){
+  const list = document.getElementById("memberList");
+  if(!members.length){
+    list.innerHTML = `<div class="card p-5 text-sm text-neutral-400">No members yet. Add yourself as the main person.</div>`;
+    return;
+  }
+  list.innerHTML = members.map(memberCard).join("");
+  members.forEach((m,i)=>{
+    document.querySelector(`[data-name="${i}"]`).addEventListener("input", e=>{ m.name=e.target.value; scheduleSave(); });
+    document.querySelector(`[data-rel="${i}"]`).addEventListener("change", e=>{ m.relationship=e.target.value; scheduleSave(); });
+    document.querySelector(`[data-bday="${i}"]`).addEventListener("change", e=>{
+      m.birthday=e.target.value;
+      const age=ageFromBirthday(m.birthday);
+      document.querySelector(`[data-age="${i}"]`).textContent = age!=null?age+" yrs":"—";
+      scheduleSave();
+    });
+    document.querySelector(`[data-primary="${i}"]`).addEventListener("change", ()=>{
+      members.forEach((x,j)=> x.primary = (j===i));
+      render(); scheduleSave();
+    });
+    document.querySelector(`[data-del="${i}"]`).addEventListener("click", ()=>{
+      members.splice(i,1); render(); saveNow();
+    });
+  });
+}
+
+document.getElementById("addBtn").addEventListener("click", ()=>{
+  members.push({ id: slugId(""), name:"", relationship: members.length?"child":"self",
+                 birthday:"", primary: !members.length });
+  render(); setSaveStatus("idle");
+});
+
+// ---- Corporation: fiscal year ----
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+let corp = { fiscal_year_start_month:7, fiscal_year_start_day:1, archived_accounts:[] }, allAccounts=[], corpTimer=null;
+function corpURL(){ const q = currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; return "api/business/config"+q; }
+
+function fyOf(date, sm, sd){
+  const m=date.getMonth()+1, day=date.getDate(), y=date.getFullYear();
+  return (m>sm || (m===sm && day>=sd)) ? y+1 : y;
+}
+function renderCorpDerived(){
+  const sm=corp.fiscal_year_start_month, sd=corp.fiscal_year_start_day;
+  const end = new Date(2001, sm-1, sd); end.setDate(end.getDate()-1);   // day before start
+  const fye = `${MONTHS[end.getMonth()]} ${end.getDate()}`;
+  const cur = fyOf(new Date(), sm, sd);
+  const cs = new Date(cur-1, sm-1, sd), ce=new Date(cur, sm-1, sd); ce.setDate(ce.getDate()-1);
+  const f = d => `${MONTHS[d.getMonth()].slice(0,3)} ${d.getDate()}, ${d.getFullYear()}`;
+  document.getElementById("fyDerived").innerHTML =
+    `Fiscal year-end: <span class="text-neutral-200">${fye}</span>. ` +
+    `Today is in <span class="text-violet-300">FY${cur}</span> (${f(cs)} – ${f(ce)}).`;
+}
+function setCorpStatus(s){ const el=document.getElementById("corpStatus");
+  const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],error:["Couldn't save","text-rose-400"],idle:["","text-neutral-500"]};
+  const [t,c]=map[s]||map.idle; el.textContent=t; el.className=`text-[11px] ${c}`; }
+
+function wireCorp(){
+  const mSel=document.getElementById("fyMonth"), dSel=document.getElementById("fyDay");
+  mSel.innerHTML = MONTHS.map((m,i)=>`<option value="${i+1}" ${corp.fiscal_year_start_month===i+1?"selected":""}>${m}</option>`).join("");
+  dSel.innerHTML = Array.from({length:31},(_,i)=>`<option value="${i+1}" ${corp.fiscal_year_start_day===i+1?"selected":""}>${i+1}</option>`).join("");
+  const onChange=()=>{ corp.fiscal_year_start_month=+mSel.value; corp.fiscal_year_start_day=+dSel.value;
+    renderCorpDerived(); setCorpStatus("saving"); clearTimeout(corpTimer); corpTimer=setTimeout(saveCorp,500); };
+  mSel.onchange=onChange; dSel.onchange=onChange;
+  renderCorpDerived();
+}
+function renderAcctChips(){
+  const wrap=document.getElementById("acctChips"); if(!wrap) return;
+  const arch=new Set(corp.archived_accounts||[]);
+  wrap.innerHTML = allAccounts.map(a=>{
+    const isA=arch.has(a);
+    return `<button data-acct="${a}" class="pill px-3 py-1.5 text-[12px] ${isA?'text-neutral-500 line-through opacity-70':'text-neutral-200'}">${a}${isA?' · archived':''}</button>`;
+  }).join("");
+  wrap.querySelectorAll("[data-acct]").forEach(b=>b.onclick=()=>toggleAcct(b.dataset.acct));
+}
+function toggleAcct(name){
+  const arch=new Set(corp.archived_accounts||[]);
+  arch.has(name)?arch.delete(name):arch.add(name);
+  corp.archived_accounts=[...arch];
+  renderAcctChips(); setCorpStatus("saving"); clearTimeout(corpTimer); corpTimer=setTimeout(saveCorp,300);
+}
+let catTax={}, catList=[], catTaxTimer=null;
+function renderCatTax(){
+  const wrap=document.getElementById("catTaxList"); if(!wrap) return;
+  wrap.innerHTML = catList.map(c=>{
+    const t=catTax[c]||{rate:0,taxable:false};
+    return `<div class="flex items-center gap-2">
+      <span class="text-[12px] text-neutral-300 flex-1 truncate">${c}</span>
+      <input data-rate="${c}" inputmode="decimal" value="${t.rate}" class="fld px-2 py-1 text-[12px] w-14 text-right num" />
+      <span class="text-[11px] text-neutral-500">%</span>
+      <label class="flex items-center gap-1 text-[11px] text-neutral-400 cursor-pointer">
+        <input data-taxable="${c}" type="checkbox" ${t.taxable?"checked":""} class="accent-violet-500" /> taxable
+      </label>
+    </div>`;
+  }).join("");
+  wrap.querySelectorAll("[data-rate]").forEach(el=>el.addEventListener("input",e=>{
+    const c=el.dataset.rate; catTax[c]=catTax[c]||{}; catTax[c].rate=parseFloat(el.value)||0; scheduleCatTax();
+  }));
+  wrap.querySelectorAll("[data-taxable]").forEach(el=>el.addEventListener("change",e=>{
+    const c=el.dataset.taxable; catTax[c]=catTax[c]||{}; catTax[c].taxable=el.checked; scheduleCatTax();
+  }));
+}
+function setCatTaxStatus(s){ const el=document.getElementById("catTaxStatus");
+  const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],error:["Couldn't save","text-rose-400"],idle:["","text-neutral-500"]};
+  const [t,c]=map[s]||map.idle; el.textContent=t; el.className=`text-[11px] ${c}`; }
+function scheduleCatTax(){ setCatTaxStatus("saving"); clearTimeout(catTaxTimer); catTaxTimer=setTimeout(saveCatTax,600); }
+async function saveCatTax(){
+  try{ const r=await fetch(corpURL(),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({category_tax:catTax})});
+    if(!r.ok) throw 0; setCatTaxStatus("saved");
+  }catch(e){ setCatTaxStatus("error"); }
+}
+async function loadCorp(){
+  try{ const r=await fetch(corpURL()); const d=await r.json();
+    corp={fiscal_year_start_month:d.fiscal_year_start_month||7, fiscal_year_start_day:d.fiscal_year_start_day||1, archived_accounts:d.archived_accounts||[]};
+    allAccounts=d.all_accounts||[];
+    catTax=d.category_tax||{}; catList=d.categories||[];
+    wireCorp(); renderAcctChips(); renderCatTax(); setCorpStatus("idle");
+  }catch(e){ /* leave defaults */ }
+}
+async function saveCorp(){
+  try{ const r=await fetch(corpURL(),{method:"PUT",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({fiscal_year_start_month:corp.fiscal_year_start_month,
+        fiscal_year_start_day:corp.fiscal_year_start_day, archived_accounts:corp.archived_accounts||[]})});
+    if(!r.ok) throw 0; setCorpStatus("saved");
+  }catch(e){ setCorpStatus("error"); }
+}
+
+async function loadFamilies(){
+  const r = await fetch("api/families"); const d = await r.json();
+  const sel = document.getElementById("familySel");
+  sel.innerHTML = d.families.map(f=>`<option value="${f.id}" ${f.active?"selected":""}>${f.name}</option>`).join("");
+  sel.onchange = ()=>loadMembers(sel.value);
+  loadMembers(sel.value || d.active);
+}
+async function loadMembers(family){
+  currentFamily = family || null;
+  const r = await fetch(membersURL()); const d = await r.json();
+  members = (d.members||[]).map(m=>({...m}));
+  const sel = document.getElementById("familySel");
+  document.getElementById("meta").textContent =
+    `${sel.options[sel.selectedIndex]?.text||""} · ${members.length} member${members.length===1?"":"s"}`;
+  render(); setSaveStatus("idle");
+  loadCorp();
+}
+document.getElementById("reestBtn").addEventListener("click", async ()=>{
+  const st=document.getElementById("reestStatus"); st.textContent="Re-estimating…";
+  try{
+    const q=currentFamily?`?family=${encodeURIComponent(currentFamily)}`:"";
+    const r=await fetch("api/business/receipts/reestimate-tax"+q,{method:"POST"});
+    const d=await r.json(); st.textContent=`Updated ${d.updated} receipt${d.updated===1?"":"s"}.`;
+  }catch(e){ st.textContent="Couldn't re-estimate."; }
+});
+loadFamilies();
+</script>
+</body>
+</html>

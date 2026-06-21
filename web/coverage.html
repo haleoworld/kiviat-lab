@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Kiviat Lab — Receipt coverage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background:#0a0a0b; color:#e7e7ea; -webkit-font-smoothing:antialiased; overflow-x:hidden; }
+    .card { background:#161618; border:1px solid #262629; border-radius:16px; }
+    .pill { background:#1e1e21; border:1px solid #2e2e32; border-radius:9999px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .fld { background:#0e0e10; border:1px solid #2e2e32; border-radius:10px; color:#f4f4f5; }
+    .bar { height:8px; border-radius:9999px; background:#26262b; overflow:hidden; }
+    .bar > span { display:block; height:100%; }
+    .row { border-top:1px solid #1f1f22; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 pb-24 pt-5">
+
+    <header class="flex items-center justify-between gap-3 mb-5">
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Receipt coverage</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">which transactions have a receipt</p>
+        </div>
+      </div>
+      <span id="live" class="text-[11px] text-neutral-500 shrink-0"></span>
+    </header>
+
+    <div id="summary" class="card p-4 mb-4"></div>
+
+    <div class="card p-3 mb-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="fStatus" class="fld px-2 py-1.5 text-[12px]"><option value="all">All</option><option value="missing">❓ Missing</option><option value="suggested">💡 Suggested</option><option value="linked">🔗 Linked</option><option value="no_receipt">∅ No receipt</option></select>
+        <select id="fAccount" class="fld px-2 py-1.5 text-[12px]"><option value="">All accounts</option></select>
+        <select id="fYear" class="fld px-2 py-1.5 text-[12px]"><option value="all">All years</option></select>
+        <input id="fSearch" placeholder="Search description…" class="fld px-2.5 py-1.5 text-[12px] w-36" />
+        <span id="fCount" class="text-[11px] text-neutral-500 ml-auto"></span>
+      </div>
+    </div>
+
+    <div id="list" class="card divide-y divide-neutral-800/60"></div>
+
+    <div id="orphanWrap" class="mt-6 hidden">
+      <button id="orphanToggle" class="text-sm text-neutral-400 hover:text-neutral-200 mb-2 flex items-center gap-1">
+        <span id="orphanCaret">▸</span> Receipts with no matching transaction <span id="orphanN" class="text-neutral-600"></span>
+      </button>
+      <div id="orphanList" class="card divide-y divide-neutral-800/60 hidden"></div>
+      <p class="text-[11px] text-neutral-600 mt-2">These didn't match any transaction by amount + date — likely cash, a personal card, a different account, or a duplicate photo.</p>
+    </div>
+
+    <footer class="mt-10 text-[11px] leading-relaxed text-neutral-600">
+      Matched by amount (±$0.02) and date (±5 days). Expenses → receipts, income → your issued invoices.
+      Transfers, card payments, and "No receipt" items are excluded. Read-only — act with the
+      No-receipt / Reconciled toggles on Statements.
+    </footer>
+  </div>
+
+<script>
+let data={rows:[],orphans:[],summary:{},accounts:[],fiscal_years:[]}, currentFamily=null;
+let filters={status:"all",account:"",year:"all",search:""};
+const esc=s=>(s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+const money=n=>{const v=Math.abs(Number(n||0));return "$"+v.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});};
+function famQ(){ return currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; }
+function fileURL(id){ return `api/business/file/${id}${famQ()}`; }
+
+function matchesF(r){
+  if(filters.status!=="all" && r.status!==filters.status) return false;
+  if(filters.account && r.account!==filters.account) return false;
+  if(filters.year!=="all" && String(r.fiscal_year)!==filters.year) return false;
+  if(filters.search && !String(r.description||"").toLowerCase().includes(filters.search.toLowerCase())) return false;
+  return true;
+}
+
+const STATUS={
+  linked:["🔗 linked","text-emerald-300"],
+  suggested:["💡 suggested","text-violet-300"],
+  missing:["❓ missing","text-amber-300"],
+  no_receipt:["∅ no receipt","text-sky-300"],
+};
+function recLink(m){ return `<a href="${fileURL(m.id)}" target="_blank" class="text-right block">
+  <div class="text-[12px] text-neutral-200 truncate max-w-[150px]">${esc(m.vendor||"receipt")}</div>
+  <div class="text-[10px] text-neutral-500">${money(m.total)} · ${esc(m.date||"")}</div></a>`; }
+function rowHTML(r){
+  const [lbl,cls]=STATUS[r.status]||STATUS.missing;
+  const m=r.match;
+  let right="";
+  if(r.status==="linked" && m){
+    right=`<div class="flex items-center gap-2 shrink-0">${recLink(m)}
+      <button data-unlink="${r.id}" title="Unlink" class="text-[11px] text-rose-400/80 hover:text-rose-300">unlink</button></div>`;
+  } else if(r.status==="suggested" && m){
+    right=`<div class="flex items-center gap-2 shrink-0">${recLink(m)}
+      <button data-confirm="${r.id}:${m.id}" class="px-2.5 py-1 text-[11px] rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">✓ confirm</button></div>`;
+  } else if(r.status==="missing"){
+    right=`<div class="flex items-center gap-1.5 shrink-0">
+      <button data-pick="${r.id}" class="pill px-2.5 py-1 text-[11px] text-violet-300">link…</button>
+      <button data-norec="${r.id}" class="pill px-2.5 py-1 text-[11px] text-neutral-400">no receipt</button></div>`;
+  } else {
+    right=`<button data-undonr="${r.id}" class="text-[11px] text-neutral-500 hover:text-neutral-300 shrink-0">undo</button>`;
+  }
+  return `<div class="row px-3 py-2" data-rowid="${r.id}">
+    <div class="flex items-center gap-3">
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] ${cls}">${lbl}</span>
+          <span class="text-[12px] num ${(+r.amount<0)?'text-neutral-200':'text-emerald-300'}">${money(r.amount)}</span>
+          ${r.reconciled?`<span class="text-[9px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-300">✓</span>`:""}
+        </div>
+        <div class="text-[11px] text-neutral-500 truncate">${esc(r.date||"")} · ${esc(r.account||"")} · ${esc(r.description||"")}</div>
+      </div>
+      ${right}
+    </div>
+    <div class="pick hidden mt-2"></div>
+  </div>`;
+}
+
+function render(){
+  const s=data.summary||{}, need=s.need||0;
+  const pctL=need?Math.round((s.linked||0)/need*100):0, pctS=need?Math.round((s.suggested||0)/need*100):0;
+  document.getElementById("summary").innerHTML=`
+    <div class="flex items-end justify-between mb-2">
+      <div><div class="text-[12px] text-neutral-400">Confirmed coverage</div>
+        <div class="text-2xl font-bold">${s.linked||0}<span class="text-neutral-500 text-base"> / ${need}</span> <span class="text-sm text-neutral-400 font-normal">linked</span></div></div>
+      <div class="text-right text-[12px] text-neutral-400">${money(s.amt_linked)} <span class="text-neutral-600">of ${money(s.amt_total)}</span></div>
+    </div>
+    <div class="bar mb-2 flex"><span style="width:${pctL}%;background:#34d399"></span><span style="width:${pctS}%;background:#8b5cf6"></span></div>
+    <div class="flex flex-wrap gap-x-4 gap-y-1 text-[12px]">
+      <span class="text-emerald-300">🔗 ${s.linked||0} linked</span>
+      <span class="text-violet-300">💡 ${s.suggested||0} suggested</span>
+      <span class="text-amber-300">❓ ${s.missing||0} missing</span>
+      <span class="text-sky-300">∅ ${s.no_receipt||0} no-receipt</span>
+      <span class="text-neutral-400">📄 ${s.orphans||0} unmatched receipts</span>
+    </div>`;
+
+  const rows=data.rows.filter(matchesF).sort((a,b)=>(b.date||"").localeCompare(a.date||""));
+  document.getElementById("fCount").textContent=`${rows.length} shown`;
+  document.getElementById("list").innerHTML= rows.length
+    ? rows.map(rowHTML).join("")
+    : `<div class="px-3 py-5 text-sm text-neutral-400">No transactions match this filter.</div>`;
+  document.querySelectorAll("[data-norec]").forEach(b=>b.addEventListener("click",()=>setNoReceipt(b.dataset.norec,true)));
+  document.querySelectorAll("[data-undonr]").forEach(b=>b.addEventListener("click",()=>setNoReceipt(b.dataset.undonr,false)));
+  document.querySelectorAll("[data-confirm]").forEach(b=>b.addEventListener("click",()=>{const [tid,rid]=b.dataset.confirm.split(":");doLink(tid,rid);}));
+  document.querySelectorAll("[data-unlink]").forEach(b=>b.addEventListener("click",()=>doUnlink(b.dataset.unlink)));
+  document.querySelectorAll("[data-pick]").forEach(b=>b.addEventListener("click",()=>openPicker(b.dataset.pick)));
+
+  const ow=document.getElementById("orphanWrap");
+  if((data.orphans||[]).length){
+    ow.classList.remove("hidden");
+    document.getElementById("orphanN").textContent=`(${data.orphans.length})`;
+    document.getElementById("orphanList").innerHTML=data.orphans.map(o=>`
+      <a href="${fileURL(o.id)}" target="_blank" class="row px-3 py-2 flex items-center gap-3">
+        <div class="min-w-0 flex-1"><div class="text-[12px] text-neutral-200 truncate">${esc(o.vendor||"receipt")}</div>
+          <div class="text-[11px] text-neutral-500 truncate">${esc(o.date||"")} · ${esc(o.category||"")}</div></div>
+        <div class="text-[12px] num text-neutral-300 shrink-0">${money(o.total)}</div></a>`).join("");
+  } else ow.classList.add("hidden");
+}
+
+async function post(url,body){
+  const r=await fetch(url+famQ(),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});
+  if(!r.ok) throw new Error("HTTP "+r.status); return r.json();
+}
+async function setNoReceipt(id,val){
+  try{ await fetch(`api/business/statements/txn/${id}${famQ()}`,{method:"PUT",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({no_receipt:val})});
+    await load();
+  }catch(e){ document.getElementById("live").textContent="couldn't update"; }
+}
+async function doLink(tid,rid){
+  try{ await post("api/business/coverage/link",{txn_id:tid,receipt_id:rid}); await load(); }
+  catch(e){ document.getElementById("live").textContent="couldn't link"; }
+}
+async function doUnlink(tid){
+  try{ await post("api/business/coverage/unlink",{txn_id:tid}); await load(); }
+  catch(e){ document.getElementById("live").textContent="couldn't unlink"; }
+}
+async function openPicker(tid){
+  const row=document.querySelector(`[data-rowid="${tid}"] .pick`); if(!row) return;
+  if(!row.classList.contains("hidden")){ row.classList.add("hidden"); row.innerHTML=""; return; }
+  row.classList.remove("hidden"); row.innerHTML=`<div class="text-[11px] text-neutral-500">loading…</div>`;
+  try{
+    const r=await fetch(`api/business/coverage/candidates/${tid}${famQ()}`); const d=await r.json();
+    const cs=d.candidates||[];
+    row.innerHTML = cs.length ? `<div class="text-[10px] text-neutral-500 mb-1">Pick a receipt to link (closest amounts first):</div>`+
+      cs.map(c=>`<div class="flex items-center gap-2 py-1">
+        <a href="${fileURL(c.id)}" target="_blank" class="text-[12px] text-neutral-300 truncate flex-1">${esc(c.vendor||"receipt")} <span class="text-neutral-500">${money(c.total)} · ${esc(c.date||"")}${c.amount_diff?` · Δ${money(c.amount_diff)}`:""}</span></a>
+        <button data-link="${tid}:${c.id}" class="px-2 py-0.5 text-[11px] rounded-full bg-violet-500/15 text-violet-300 border border-violet-500/30">link</button></div>`).join("")
+      : `<div class="text-[11px] text-neutral-500">No available receipts to link.</div>`;
+    row.querySelectorAll("[data-link]").forEach(b=>b.addEventListener("click",()=>{const[t,rc]=b.dataset.link.split(":");doLink(t,rc);}));
+  }catch(e){ row.innerHTML=`<div class="text-[11px] text-rose-400">couldn't load candidates</div>`; }
+}
+
+function populateFilters(){
+  document.getElementById("fAccount").innerHTML=`<option value="">All accounts</option>`+data.accounts.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join("");
+  document.getElementById("fYear").innerHTML=`<option value="all">All years</option>`+data.fiscal_years.map(y=>`<option value="${y}">FY${y}</option>`).join("");
+}
+function wireFilters(){
+  document.getElementById("fStatus").addEventListener("change",e=>{filters.status=e.target.value;render();});
+  document.getElementById("fAccount").addEventListener("change",e=>{filters.account=e.target.value;render();});
+  document.getElementById("fYear").addEventListener("change",e=>{filters.year=e.target.value;render();});
+  document.getElementById("fSearch").addEventListener("input",e=>{filters.search=e.target.value;render();});
+  document.getElementById("orphanToggle").addEventListener("click",()=>{
+    const l=document.getElementById("orphanList"),c=document.getElementById("orphanCaret");
+    l.classList.toggle("hidden"); c.textContent=l.classList.contains("hidden")?"▸":"▾";
+  });
+}
+async function load(){
+  document.getElementById("live").textContent="loading…";
+  try{
+    const fr=await fetch("api/families"); const fd=await fr.json();
+    const fam=(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
+    currentFamily=fam?fam.id:null;
+    const r=await fetch(`api/business/coverage${famQ()}`); data=await r.json();
+    populateFilters(); render();
+    document.getElementById("meta").textContent=`${fam?fam.name:"household"} · matched by amount + date`;
+    document.getElementById("live").textContent="";
+  }catch(e){ document.getElementById("live").textContent="couldn't load"; }
+}
+wireFilters(); load();
+</script>
+</body>
+</html>

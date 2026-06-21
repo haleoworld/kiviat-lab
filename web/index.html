@@ -18,25 +18,32 @@
 
     <!-- Header -->
     <header class="flex items-center justify-between gap-3 mb-5">
-      <div class="min-w-0">
-        <h1 class="text-2xl font-bold tracking-tight">Kiviat&nbsp;Lab</h1>
-        <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+      <div class="flex items-center gap-2 min-w-0">
+        <button onclick="openNav()" aria-label="Menu" class="pill px-3 py-2.5 shrink-0 flex items-center text-neutral-200"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold tracking-tight">Kiviat&nbsp;Lab</h1>
+          <p id="meta" class="text-xs text-neutral-500 mt-0.5 truncate">loading…</p>
+        </div>
       </div>
-      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[45%] truncate"></select>
+      <select id="familySel" class="pill px-3 py-2 text-sm text-neutral-200 outline-none shrink-0 max-w-[50vw] truncate"></select>
     </header>
 
     <div id="content" class="space-y-5"></div>
 
     <footer class="mt-8 text-[11px] leading-relaxed text-neutral-600">
       Numbers are computed live from your snapshot. Confidence flags reflect input quality —
-      🟢 high · 🟡 medium · 🔴 low. This makes you <em>informed, not advised</em>; validate
+      <svg viewBox="0 0 8 8" width="8" height="8" fill="currentColor" class="inline-block align-middle text-emerald-400"><circle cx="4" cy="4" r="4"/></svg> high ·
+      <svg viewBox="0 0 8 8" width="8" height="8" fill="currentColor" class="inline-block align-middle text-amber-400"><circle cx="4" cy="4" r="4"/></svg> medium ·
+      <svg viewBox="0 0 8 8" width="8" height="8" fill="currentColor" class="inline-block align-middle text-rose-400"><circle cx="4" cy="4" r="4"/></svg> low.
+      This makes you <em>informed, not advised</em>; validate
       big moves with a fee-only advisor and a CPA.
     </footer>
   </div>
 
 <script>
 const CUR = (n) => (n<0?"-":"") + "$" + Math.abs(Math.round(n)).toLocaleString();
-const CONF = { high:["🟢","text-emerald-400"], medium:["🟡","text-amber-400"], low:["🔴","text-rose-400"] };
+const DOT = '<svg viewBox="0 0 8 8" width="8" height="8" fill="currentColor" class="inline-block align-middle mr-0.5"><circle cx="4" cy="4" r="4"/></svg>';
+const CONF = { high:[DOT,"text-emerald-400"], medium:[DOT,"text-amber-400"], low:[DOT,"text-rose-400"] };
 const STATUS_COLOR = { over:"text-rose-400", under:"text-amber-400", missing:"text-rose-400", ok:"text-emerald-400" };
 const SEV = { high:"bg-rose-500/15 text-rose-300 border-rose-500/30",
               medium:"bg-amber-500/15 text-amber-300 border-amber-500/30",
@@ -123,7 +130,7 @@ async function loadDashboard(family){
       <span class="pill px-2 py-0.5 text-[11px] ${al.risk_vs_target==='above'?'text-rose-400':'text-emerald-400'}">${al.risk_vs_target} intended risk</span>
     </div>
     <p class="text-xs text-neutral-500 mt-2">${al.notes}</p>
-    ${(al.missing_data_flags||[]).map(f=>`<p class="text-[11px] text-amber-400/80 mt-1">⚠ ${f}</p>`).join('')}
+    ${(al.missing_data_flags||[]).map(f=>`<p class="text-[11px] text-amber-400/80 mt-1"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="inline-block align-[-1px] mr-0.5"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>${f}</p>`).join('')}
   </div>`;
 
   // By account
