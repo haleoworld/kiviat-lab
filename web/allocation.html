@@ -54,7 +54,8 @@ const RISKC={1:"text-emerald-400",2:"text-emerald-300",3:"text-amber-400",4:"tex
 const COLORS={cash:"#737373",tbill:"#a3a3a3",bonds:"#818cf8",real_estate:"#60a5fa",equities_dividend:"#34d399",gold:"#fbbf24",
   equities_uncat:"#22d3ee",equities_growth:"#a78bfa",equities_trade:"#f472b6",crypto:"#f87171"};
 
-let classes=[], targets={}, mixes=[], currentFamily=null, saveTimer=null, donut=null, frontChart=null, borrow=4;
+let classes=[], targets={}, mixes=[], currentFamily=null, saveTimer=null, donut=null, frontChart=null, borrow=4, assetBase=0;
+const MON=(n)=>'$'+Math.round(n||0).toLocaleString()+'/mo';
 
 function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function clsByKey(k){return classes.find(c=>c.key===k);}
@@ -97,6 +98,13 @@ function portfolioVol(weights){
   return Math.sqrt(Math.max(0,v));
 }
 // Diversified estimates: drawdown scaled by the same diversification benefit as σ.
+// Monthly passive income = (Σ weightᵢ × income_yieldᵢ) × asset base ÷ 12. Income yield is the
+// income-only portion of return (dividends/coupons/interest/rent), per class, editable.
+function portfolioIncome(weights){
+  const tot=classes.reduce((s,c)=>s+(+weights[c.key]||0),0)||1;
+  let y=0; classes.forEach(c=>{ y += ((+weights[c.key]||0)/tot)*(+c.income_yield||0); });
+  return {yieldPct:y, monthly: assetBase*y/100/12};
+}
 function metrics(weights){
   const b=blended(weights);
   const dvol=portfolioVol(weights);
@@ -104,7 +112,7 @@ function metrics(weights){
   // Risk score now scales with the DIVERSIFIED σ (≈6% per level, 1–5), so it moves
   // with σ/drawdown instead of being a separate ordinal class-tier average.
   const riskScore=Math.max(1,Math.min(5, 1+dvol/6));
-  return {...b, dvol, ddiv:b.dd*ratio, ratio, riskScore};
+  return {...b, dvol, ddiv:b.dd*ratio, ratio, riskScore, inc:portfolioIncome(weights)};
 }
 
 // ---- persistence ----
@@ -113,7 +121,7 @@ function setStatus(s,msg){const el=document.getElementById('saveStatus');if(!el)
   const map={saving:["Saving…","text-amber-400"],saved:["Saved ✓","text-emerald-400"],
     error:["Couldn't save","text-rose-400"],idle:["","text-neutral-500"]};
   const[t,c]=map[s]||map.idle;el.textContent=msg||t;el.className=`text-[11px] ${c}`;}
-function statsPayload(){const o={};classes.forEach(c=>o[c.key]={ret:c.ret,vol:c.vol,maxdd:c.maxdd,lev:c.lev});return o;}
+function statsPayload(){const o={};classes.forEach(c=>o[c.key]={ret:c.ret,vol:c.vol,maxdd:c.maxdd,lev:c.lev,income_yield:c.income_yield});return o;}
 function scheduleSave(){setStatus('saving');clearTimeout(saveTimer);saveTimer=setTimeout(saveNow,700);}
 async function saveNow(stats){try{const r=await fetch(url(),{method:"PUT",headers:{"Content-Type":"application/json"},
   body:JSON.stringify({targets,borrow,mixes,stats:stats===undefined?statsPayload():stats})});setStatus(r.ok?'saved':'error');}catch(e){setStatus('error');}}
@@ -158,13 +166,14 @@ function summaryCard(){
     <div class="text-[11px] text-neutral-600">now ${cv}${extra?` · ${extra}`:''}</div></div>`;
   return `<div class="card p-4">
     <h2 class="font-semibold mb-2">Target portfolio</h2>
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 text-center">
       ${cell("Expected return", PCT(t.ret), PCT(c.ret), "text-emerald-400")}
       ${cell("Volatility (σ)", PCT(t.dvol), PCT(c.dvol), "text-amber-400", `undiv ${PCT(t.vol)}`)}
       ${cell("Est. max drawdown", PCT(t.ddiv), PCT(c.ddiv), "text-rose-400", `undiv ${PCT(t.dd)}`)}
       ${cell("Risk score", t.riskScore.toFixed(1)+"/5", c.riskScore.toFixed(1)+"/5", RISKC[Math.round(t.riskScore)]||'')}
+      ${cell("Passive income", MON(t.inc.monthly), MON(c.inc.monthly), "text-sky-400", `${t.inc.yieldPct.toFixed(1)}% yield`)}
     </div>
-    <p class="text-[10px] text-neutral-600 mt-2 text-center">σ &amp; drawdown are diversification-adjusted (correlations); "undiv" = the simple weighted average. Risk score now scales with the diversified σ.</p>
+    <p class="text-[10px] text-neutral-600 mt-2 text-center">σ &amp; drawdown are diversification-adjusted (correlations); "undiv" = the simple weighted average. Passive income = income yield × your $${Math.round(assetBase).toLocaleString()} asset base ÷ 12.</p>
   </div>`;
 }
 // Classic model portfolios (approximate long-run return / volatility / worst drawdown).
@@ -186,12 +195,12 @@ function popRow(m, you){
     <div class="num text-[11px] text-right shrink-0 whitespace-nowrap">
       <span class="text-emerald-400">${Math.round(m.ret)}%</span> <span class="text-neutral-700">·</span>
       <span class="text-amber-400">σ${Math.round(m.vol)}</span> <span class="text-neutral-700">·</span>
-      <span class="text-rose-400">${Math.round(m.dd)}%</span>
+      <span class="text-rose-400">${Math.round(m.dd)}%</span>${m.income!=null?` <span class="text-neutral-700">·</span> <span class="text-sky-400">${MON(m.income)}</span>`:''}
     </div></div>`;
 }
 function popularCard(){
   const t=metrics(targets);
-  const you={name:"Your target mix", mix:`risk ${t.riskScore.toFixed(1)}/5 · ${Math.round(t.sum)}% allocated`, ret:t.ret, vol:t.dvol, dd:t.ddiv};
+  const you={name:"Your target mix", mix:`risk ${t.riskScore.toFixed(1)}/5 · ${Math.round(t.sum)}% allocated`, ret:t.ret, vol:t.dvol, dd:t.ddiv, income:t.inc.monthly};
   return `<div class="card p-4" id="popularCard">
     <h2 class="font-semibold mb-1">Vs. popular allocations</h2>
     <p class="text-[11px] text-neutral-500 mb-2">Your mix against classic models —
@@ -280,6 +289,7 @@ function mixCard(){
         <button id="normBtn" class="pill px-3 py-1 text-[11px] text-violet-200 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed">Normalize</button>
       </div>
     </div>
+    <div id="mixLive" class="grid grid-cols-5 gap-1 text-center mb-2 rounded-lg bg-neutral-900/60 border border-neutral-800 py-2"></div>
     <div class="flex items-center justify-between gap-2 mb-2">
       <p class="text-[11px] text-neutral-500">Set the % for each class. "pp" = points above/below your current.</p>
       <button id="matchBtn" class="text-[11px] text-neutral-400 hover:text-violet-300 shrink-0">match current</button>
@@ -298,6 +308,9 @@ function statRow(c){
       <span class="text-[10px] text-neutral-500 w-10">return</span>${f('ret',c.ret,'%')}
       <span class="text-[10px] text-neutral-500 w-6">σ</span>${f('vol',c.vol,'%')}
       <span class="text-[10px] text-neutral-500 w-12">max DD</span>${f('maxdd',c.maxdd,'%')}
+    </div>
+    <div class="flex items-center gap-2 mt-1">
+      <span class="text-[10px] text-sky-400/80 w-16">income yield</span>${f('income_yield',c.income_yield!=null?c.income_yield:0,'%')}
     </div>
     <div id="lev-${c.key}" class="text-[11px] text-blue-300/80 mt-1"></div>
   </div>`;
@@ -360,6 +373,12 @@ function updateDerived(){
   const sum=blended(targets).sum, on100=Math.round(sum)===100;
   const ms=document.getElementById('mixSum'); if(ms){ ms.textContent=`sums to ${sum.toFixed(0)}%`; ms.className=`num text-[11px] ${on100?'text-emerald-400':'text-amber-400'}`; }
   const nb=document.getElementById('normBtn'); if(nb) nb.disabled=on100;
+  // live metrics preview inside the mix editor (updates as sliders move)
+  const ml=document.getElementById('mixLive'); if(ml){ const t=metrics(targets);
+    const cell=(lbl,val,col)=>`<div><div class="text-[9px] uppercase tracking-wide text-neutral-500">${lbl}</div><div class="num text-sm font-semibold ${col}">${val}</div></div>`;
+    ml.innerHTML = cell('return',PCT(t.ret),'text-emerald-400')+cell('σ',PCT(t.dvol),'text-amber-400')
+      +cell('max DD',PCT(t.ddiv),'text-rose-400')+cell('risk',t.riskScore.toFixed(1)+'/5',RISKC[Math.round(t.riskScore)]||'')
+      +cell('income',MON(t.inc.monthly),'text-sky-400'); }
   // gaps
   classes.forEach(c=>{ const g=(targets[c.key]||0)-c.current_pct; const el=document.getElementById('gap-'+c.key);
     if(el){ el.textContent=(g>=0?'+':'')+g.toFixed(0)+'pp'; el.className=`text-[11px] num ${g>=0?'text-emerald-400/80':'text-rose-400/80'}`; } });
@@ -368,7 +387,7 @@ function updateDerived(){
     el.textContent = Math.abs(L-1)>0.05 ? `leveraged ${L}× → return ${e.ret.toFixed(0)}% · σ ${e.vol.toFixed(0)}% · max DD ${e.maxdd.toFixed(0)}%` : ''; });
   // saved-mix stats (recompute under current assumptions)
   mixes.forEach((mx,i)=>{ const el=document.getElementById('mixstat-'+i); if(!el)return; const m=metrics(mx.targets);
-    el.innerHTML=`<span class="text-emerald-400">${m.ret.toFixed(1)}%</span> · <span class="text-amber-400">σ${m.dvol.toFixed(0)}</span> · <span class="text-rose-400">${m.ddiv.toFixed(0)}%</span>`; });
+    el.innerHTML=`<span class="text-emerald-400">${m.ret.toFixed(1)}%</span> · <span class="text-amber-400">σ${m.dvol.toFixed(0)}</span> · <span class="text-rose-400">${m.ddiv.toFixed(0)}%</span> · <span class="text-sky-400">${MON(m.inc.monthly)}</span>`; });
   drawDonut(); drawFrontier();
 }
 function drawDonut(){
@@ -401,6 +420,7 @@ async function load(family){
   const r=await fetch(url()); const d=await r.json();
   classes=d.classes||[];
   borrow=(d.borrow!=null)?d.borrow:4;
+  assetBase=d.asset_base||0;
   mixes=d.mixes||[];
   targets={};
   if(d.saved_targets){ classes.forEach(c=>targets[c.key]=d.saved_targets[c.key]||0); }

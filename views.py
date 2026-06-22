@@ -692,6 +692,13 @@ ALLOC_LABELS = {"bonds": "Bonds / Fixed income", "cash": "Cash",
                 "tbill": "T-Bills / money market"}
 # Borrowing cost subtracted from leveraged return (mortgage/margin rate, %).
 DEFAULT_BORROW_RATE = 4.0
+# Income-only yield per class (%/yr) — the dividends/coupons/interest/rent portion of return,
+# used for monthly passive-income estimates. Editable per class (saved in plan stats). Gold,
+# growth, trade and crypto pay ~nothing; real estate nets ~0 for this household (condo bleeds).
+DEFAULT_INCOME_YIELD = {
+    "cash": 0.5, "tbill": 4.0, "bonds": 4.5, "real_estate": 0.0, "equities_dividend": 3.5,
+    "gold": 0.0, "equities_growth": 0.5, "equities_trade": 0.0, "crypto": 0.0,
+}
 
 
 def _re_leverage(snap: dict) -> float:
@@ -751,6 +758,10 @@ def allocation_calculator(family_id: str) -> dict:
     saved_stats = plan.get("stats") or {}
     re_lev = _re_leverage(snap) if snap else 1.0
     default_lev = {"real_estate": re_lev}   # all others unlevered (trade already baked in)
+    asset_base = 0
+    if snap:
+        asset_base = allocation(snap, load_target(family_id), load_holdings(family_id),
+                                config.load_app_config().get("fx_usd_cad", 1.0)).get("asset_base", 0)
     classes = []
     for k in ALLOC_ORDER:
         d = RESEARCHED_STATS[k]
@@ -760,6 +771,7 @@ def allocation_calculator(family_id: str) -> dict:
             "ret": s.get("ret", d["ret"]), "vol": s.get("vol", d["vol"]),
             "maxdd": s.get("maxdd", d["maxdd"]), "risk": d["risk"],
             "lev": s.get("lev", default_lev.get(k, 1)),
+            "income_yield": s.get("income_yield", DEFAULT_INCOME_YIELD.get(k, 0)),
             "current_pct": round(current.get(k, 0), 1),
         })
     return {
@@ -767,6 +779,7 @@ def allocation_calculator(family_id: str) -> dict:
         "saved_targets": plan.get("targets"),
         "mixes": plan.get("mixes") or [],
         "borrow": plan.get("borrow") or DEFAULT_BORROW_RATE,
+        "asset_base": round(asset_base),
         "currency": snap.get("currency", "CAD") if snap else "CAD",
     }
 
