@@ -78,6 +78,34 @@ def load_holdings(family_id: str) -> list:
     return (yaml.safe_load(f.read_text()) or {}).get("holdings", [])
 
 
+# Categories that live INSIDE brokerage accounts — used to split the Assets page's
+# single "Equities" bucket the same way the Allocation page splits it.
+_EQUITY_MIX_CATS = ("equities_growth", "equities_dividend", "equities_trade",
+                    "crypto", "cash_tbill")
+
+
+def holdings_equity_mix(family_id: str) -> dict:
+    """Fractional split of brokerage holdings across the equity-side categories (book, USD→CAD).
+    Returns {category: fraction} summing to 1, or {} when there are no holdings — the Assets page
+    applies these proportions to its tracked equity total so its pie matches the Allocation page
+    without changing net worth."""
+    holdings = load_holdings(family_id)
+    if not holdings:
+        return {}
+    fx = config.load_app_config().get("fx_usd_cad", 1.0) or 1.0
+    by_cat: dict[str, float] = {}
+    for h in holdings:
+        cat = h.get("category", "equities_uncat")
+        if cat not in _EQUITY_MIX_CATS:
+            continue
+        book = (h.get("book") or 0) * (fx if h.get("currency") == "USD" else 1)
+        by_cat[cat] = by_cat.get(cat, 0) + book
+    total = sum(by_cat.values())
+    if total <= 0:
+        return {}
+    return {k: v / total for k, v in by_cat.items()}
+
+
 # ---------- helpers ----------
 
 def _sum(items, key):

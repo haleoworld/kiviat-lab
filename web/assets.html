@@ -73,15 +73,24 @@ const clone=(x)=>JSON.parse(JSON.stringify(x));
 const CLASSES={
   real_estate:{label:"Real estate",color:"#60a5fa"},
   equities:{label:"Equities",color:"#34d399"},
-  cash:{label:"Cash / T-bill",color:"#a3a3a3"},
+  cash:{label:"Cash",color:"#737373"},
   commodity:{label:"Commodity",color:"#fbbf24"},
-  crypto:{label:"Crypto",color:"#f472b6"},
+  crypto:{label:"Crypto",color:"#f87171"},
   business:{label:"Business",color:"#a78bfa"},
   vehicle:{label:"Vehicle",color:"#fb923c"},
   other:{label:"Other",color:"#22d3ee"},
 };
+// Equity-side categories — used ONLY by the Asset-allocation pie/chart (not the item-list
+// dropdown). Colors match the Allocation page so the two read alike.
+const CAT_META={
+  equities_growth:{label:"Equities — Growth",color:"#a78bfa"},
+  equities_dividend:{label:"Equities — Dividend",color:"#34d399"},
+  equities_trade:{label:"Equities — Trade",color:"#f472b6"},
+  cash_tbill:{label:"T-bill / MMF",color:"#a3a3a3"},
+};
+const catMeta=(c)=>CAT_META[c]||CLASSES[c]||CLASSES.other;
 
-let data={months:{}}, seed=null, seedMonth=null, currentMonth=null, currentFamily=null, saveTimer=null;
+let data={months:{}}, seed=null, seedMonth=null, currentMonth=null, currentFamily=null, saveTimer=null, holdingsMix={};
 let preset='traditional', mode='gross', liab={by_month:{},fallback:0}, contrib={}, donut=null, netChart=null;
 
 function monthLabel(k){const[y,m]=k.split('-');return `${MON[(+m)-1]||'?'} ${y}`;}
@@ -130,6 +139,19 @@ function excludedTotal(m){const c=computed(m);return c.its.reduce((s,it,i)=>s+(!
 function liabilityFor(m){return computed(m).liab;}
 function netFor(m){return assetTotal(m)-liabilityFor(m);}
 function allocByClass(m){const c=computed(m);const o={};c.its.forEach((it,i)=>{if(isAsset(it))o[it.class]=(o[it.class]||0)+c.vals[i];});return o;}
+// Same as allocByClass, but explode the single "equities" bucket into its holding categories
+// (growth/dividend/trade/crypto/T-bill) using the live holdings mix — so the pie matches the
+// Allocation page. The equity TOTAL is unchanged; only its internal split changes.
+function allocByCategory(m){
+  const base=allocByClass(m);
+  if(!holdingsMix||!Object.keys(holdingsMix).length||!base.equities) return base;
+  const o={};
+  for(const [cls,val] of Object.entries(base)){
+    if(cls==='equities'){ for(const [cat,frac] of Object.entries(holdingsMix)) o[cat]=(o[cat]||0)+val*frac; }
+    else o[cls]=(o[cls]||0)+val;
+  }
+  return o;
+}
 
 // ---- persistence ----
 function url(){return "api/assets"+(currentFamily?`?family=${encodeURIComponent(currentFamily)}`:"");}
@@ -167,16 +189,17 @@ function breakdownCard(m){
   </div>`;
 }
 function allocCard(m){
-  const alloc=allocByClass(m), total=Object.values(alloc).reduce((s,v)=>s+v,0)||1;
+  const alloc=allocByCategory(m), total=Object.values(alloc).reduce((s,v)=>s+v,0)||1;
+  const split=holdingsMix&&Object.keys(holdingsMix).length;
   const rows=Object.entries(alloc).sort((a,b)=>b[1]-a[1]).map(([c,v])=>{
-    const m=CLASSES[c]||CLASSES.other;
+    const m=catMeta(c);
     return `<div class="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-800 last:border-0">
       <span class="flex items-center gap-2 min-w-0"><span style="width:10px;height:10px;border-radius:2px;background:${m.color}" class="inline-block shrink-0"></span><span class="text-sm truncate">${m.label}</span></span>
       <span class="num text-sm shrink-0">${CUR(v)} <span class="text-neutral-500">· ${Math.round(100*v/total)}%</span></span></div>`;
   }).join('') || `<p class="text-xs text-neutral-600 py-2">No counted assets.</p>`;
   return `<div class="card p-4">
     <h2 class="font-semibold mb-1">Asset allocation</h2>
-    <p class="text-[11px] text-neutral-500 mb-2">${monthLabel(m)} · counted assets · ${mode} value</p>
+    <p class="text-[11px] text-neutral-500 mb-2">${monthLabel(m)} · counted assets · ${mode} value${split?' · equities split by category, from holdings':''}</p>
     <div class="flex flex-col sm:flex-row gap-4 items-center">
       <div class="w-40 h-40 shrink-0"><canvas id="allocChart"></canvas></div>
       <div class="flex-1 w-full">${rows}</div>
@@ -321,12 +344,12 @@ function updateCharts(){
 }
 function drawDonut(){
   const cv=document.getElementById('allocChart'); if(!cv)return;
-  const alloc=allocByClass(currentMonth);
+  const alloc=allocByCategory(currentMonth);
   const entries=Object.entries(alloc).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]);
   if(donut)donut.destroy();
   donut=new Chart(cv,{type:'doughnut',
-    data:{labels:entries.map(([c])=>(CLASSES[c]||CLASSES.other).label),
-      datasets:[{data:entries.map(([,v])=>v),backgroundColor:entries.map(([c])=>(CLASSES[c]||CLASSES.other).color),
+    data:{labels:entries.map(([c])=>catMeta(c).label),
+      datasets:[{data:entries.map(([,v])=>v),backgroundColor:entries.map(([c])=>catMeta(c).color),
         borderColor:'#0a0a0b',borderWidth:2}]},
     options:{plugins:{legend:{display:false},tooltip:{callbacks:{label:i=>`${i.label}: ${CUR(i.parsed)}`}}},cutout:'62%',responsive:true,maintainAspectRatio:true}});
 }
@@ -379,7 +402,7 @@ async function loadFamilies(){
 async function load(family){
   currentFamily=family||null;
   const r=await fetch(url()); const d=await r.json();
-  seed=d.seed||{items:[]}; seedMonth=d.seed_month||'2026-06'; liab=d.liabilities||{by_month:{},fallback:0}; contrib=d.contributions||{};
+  seed=d.seed||{items:[]}; seedMonth=d.seed_month||'2026-06'; liab=d.liabilities||{by_month:{},fallback:0}; contrib=d.contributions||{}; holdingsMix=d.holdings_mix||{};
   const hasSaved=d.months&&Object.keys(d.months).length;
   data.months=hasSaved?d.months:{[seedMonth]:clone(seed)};
   currentMonth=monthKeys().slice(-1)[0];

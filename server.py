@@ -315,6 +315,7 @@ def api_assets(request: Request, family: Optional[str] = None,
         "seed_month": views.finances_seed_month(fid),
         "liabilities": views.assets_liabilities(fid),
         "contributions": views.assets_contributions(fid),
+        "holdings_mix": views.holdings_equity_mix(fid),
         "currency": views.load_snapshot(fid).get("currency", "CAD"),
     })
 
