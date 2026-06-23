@@ -35,3 +35,18 @@ circled screenshots): the **Target portfolio** card, the **Vs. popular allocatio
 ## Notes
 - No data migration: classes without a saved `income_yield` fall back to defaults.
 - `save_alloc_plan` already round-trips `stats`; just widen the per-class stat shape by one field.
+
+## Follow-up refinements (2026-06-22 → 06-23)
+- **Yield % shown with every income figure** (`INCY()` helper = "$X/mo · Y.Y%") on saved-mix rows,
+  the "Your target mix" popular-allocations row, and the live mix-editor strip — so the income/yield
+  trade-off is legible when switching presets.
+- **Income on the popular benchmark models**: each `POPULAR` entry got an estimated `yld` (60/40 2.9%
+  · Bogleheads 2.6% · Aggressive 2.3% · Buffett 2.0% · All-Weather 3.0% · Permanent 2.1% ·
+  Age-based 2.5%); rows now show income + yield too (labelled approximate).
+- **Active-preset marking**: `updateDerived` finds the saved mix whose targets equal the live target
+  (tol 0.01 across all classes) and flags that row "● Active" + violet highlight; clears on edit /
+  when nothing matches.
+- **Base re-based to investable $487,637** (excl. real-estate equity) for BOTH income and growth —
+  supersedes the $706k decision above. See `allocation-growth-chart.md` for the rationale and the
+  `invest_base` payload field. Income figures dropped ~31% (ratio 0.69); $1,500/mo now needs a 3.69%
+  yield, and $2,000/mo is unreachable (max ≈ $1,829/mo at 100% bonds).

@@ -15,6 +15,17 @@
     .fld:focus, .fld:focus-within { outline:none; border-color:#a78bfa; }
     input[type=range]{ -webkit-appearance:none; appearance:none; height:4px; background:#2e2e32; border-radius:9999px; }
     input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:#a78bfa; border:2px solid #0a0a0b; cursor:pointer; }
+    /* Sticky target-mix header: compact metrics + taller chart once pinned. */
+    #mixSticky{ transition:padding .15s ease; }
+    #mixSticky #growthBox{ height:96px; transition:height .18s ease; }
+    .mval{ font-size:.875rem; transition:font-size .15s ease; }
+    .mlbl{ font-size:9px; transition:font-size .15s ease; }
+    #mixSticky.stuck{ box-shadow:0 8px 20px rgba(0,0,0,.45); border-bottom:1px solid #262629; }
+    #mixSticky.stuck #mixTitle{ font-size:.8rem; }
+    #mixSticky.stuck #mixLive{ padding-top:.2rem; padding-bottom:.2rem; }
+    #mixSticky.stuck .mval{ font-size:.72rem; }
+    #mixSticky.stuck .mlbl{ font-size:8px; }
+    #mixSticky.stuck #growthBox{ height:150px; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -54,8 +65,9 @@ const RISKC={1:"text-emerald-400",2:"text-emerald-300",3:"text-amber-400",4:"tex
 const COLORS={cash:"#737373",tbill:"#a3a3a3",bonds:"#818cf8",real_estate:"#60a5fa",equities_dividend:"#34d399",gold:"#fbbf24",
   equities_uncat:"#22d3ee",equities_growth:"#a78bfa",equities_trade:"#f472b6",crypto:"#f87171"};
 
-let classes=[], targets={}, mixes=[], currentFamily=null, saveTimer=null, donut=null, frontChart=null, borrow=4, assetBase=0;
+let classes=[], targets={}, mixes=[], currentFamily=null, saveTimer=null, donut=null, frontChart=null, borrow=4, assetBase=0, retireInfo={}, growthChart=null, growthReal=false;
 const MON=(n)=>'$'+Math.round(n||0).toLocaleString()+'/mo';
+const INCY=(inc)=>MON(inc.monthly)+' · '+(inc.yieldPct||0).toFixed(1)+'%';
 
 function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function clsByKey(k){return classes.find(c=>c.key===k);}
@@ -173,18 +185,19 @@ function summaryCard(){
       ${cell("Risk score", t.riskScore.toFixed(1)+"/5", c.riskScore.toFixed(1)+"/5", RISKC[Math.round(t.riskScore)]||'')}
       ${cell("Passive income", MON(t.inc.monthly), MON(c.inc.monthly), "text-sky-400", `${t.inc.yieldPct.toFixed(1)}% yield`)}
     </div>
-    <p class="text-[10px] text-neutral-600 mt-2 text-center">σ &amp; drawdown are diversification-adjusted (correlations); "undiv" = the simple weighted average. Passive income = income yield × your $${Math.round(assetBase).toLocaleString()} asset base ÷ 12.</p>
+    <p class="text-[10px] text-neutral-600 mt-2 text-center">σ &amp; drawdown are diversification-adjusted (correlations); "undiv" = the simple weighted average. Passive income = income yield × your $${Math.round(assetBase).toLocaleString()} investable base (real estate excluded) ÷ 12.</p>
   </div>`;
 }
 // Classic model portfolios (approximate long-run return / volatility / worst drawdown).
+// yld = estimated income yield (%/yr) from the model's stock-dividend + bond/cash interest mix.
 const POPULAR=[
-  {name:"60 / 40 balanced",      mix:"60% stocks · 40% bonds",                 ret:8,   vol:10, dd:-30},
-  {name:"Bogleheads 3-fund",     mix:"~70% stocks · 30% bonds (US+intl)",      ret:8,   vol:11, dd:-35},
-  {name:"Aggressive 80 / 20",    mix:"80% stocks · 20% bonds",                 ret:9,   vol:13, dd:-40},
-  {name:"Buffett 90 / 10",       mix:"90% S&P 500 · 10% T-bills",              ret:10,  vol:16, dd:-50},
-  {name:"All-Weather (Dalio)",   mix:"30% stk · 55% bonds · 15% gold/cmdty",   ret:7,   vol:8,  dd:-20},
-  {name:"Permanent (Browne)",    mix:"25% each: stocks/bonds/cash/gold",       ret:6,   vol:7,  dd:-15},
-  {name:"Age-based (~75/25)",    mix:"75% stocks · 25% bonds (age 39)",        ret:8.5, vol:12, dd:-35},
+  {name:"60 / 40 balanced",      mix:"60% stocks · 40% bonds",                 ret:8,   vol:10, dd:-30, yld:2.9},
+  {name:"Bogleheads 3-fund",     mix:"~70% stocks · 30% bonds (US+intl)",      ret:8,   vol:11, dd:-35, yld:2.6},
+  {name:"Aggressive 80 / 20",    mix:"80% stocks · 20% bonds",                 ret:9,   vol:13, dd:-40, yld:2.3},
+  {name:"Buffett 90 / 10",       mix:"90% S&P 500 · 10% T-bills",              ret:10,  vol:16, dd:-50, yld:2.0},
+  {name:"All-Weather (Dalio)",   mix:"30% stk · 55% bonds · 15% gold/cmdty",   ret:7,   vol:8,  dd:-20, yld:3.0},
+  {name:"Permanent (Browne)",    mix:"25% each: stocks/bonds/cash/gold",       ret:6,   vol:7,  dd:-15, yld:2.1},
+  {name:"Age-based (~75/25)",    mix:"75% stocks · 25% bonds (age 39)",        ret:8.5, vol:12, dd:-35, yld:2.5},
 ];
 function popRow(m, you){
   return `<div class="flex items-center justify-between gap-2 py-1.5 px-2 rounded-lg border-b border-neutral-800 last:border-0 ${you?'bg-violet-500/10':''}">
@@ -195,25 +208,25 @@ function popRow(m, you){
     <div class="num text-[11px] text-right shrink-0 whitespace-nowrap">
       <span class="text-emerald-400">${Math.round(m.ret)}%</span> <span class="text-neutral-700">·</span>
       <span class="text-amber-400">σ${Math.round(m.vol)}</span> <span class="text-neutral-700">·</span>
-      <span class="text-rose-400">${Math.round(m.dd)}%</span>${m.income!=null?` <span class="text-neutral-700">·</span> <span class="text-sky-400">${MON(m.income)}</span>`:''}
+      <span class="text-rose-400">${Math.round(m.dd)}%</span>${m.inc?` <span class="text-neutral-700">·</span> <span class="text-sky-400">${INCY(m.inc)}</span>`:''}
     </div></div>`;
 }
 function popularCard(){
   const t=metrics(targets);
-  const you={name:"Your target mix", mix:`risk ${t.riskScore.toFixed(1)}/5 · ${Math.round(t.sum)}% allocated`, ret:t.ret, vol:t.dvol, dd:t.ddiv, income:t.inc.monthly};
+  const you={name:"Your target mix", mix:`risk ${t.riskScore.toFixed(1)}/5 · ${Math.round(t.sum)}% allocated`, ret:t.ret, vol:t.dvol, dd:t.ddiv, inc:t.inc};
   return `<div class="card p-4" id="popularCard">
     <h2 class="font-semibold mb-1">Vs. popular allocations</h2>
     <p class="text-[11px] text-neutral-500 mb-2">Your mix against classic models —
-      <span class="text-emerald-400">return</span> · <span class="text-amber-400">σ</span> · <span class="text-rose-400">max drawdown</span>.
-      Model figures are approximate long-run history.</p>
-    ${popRow(you, true)}${POPULAR.map(m=>popRow(m,false)).join('')}
+      <span class="text-emerald-400">return</span> · <span class="text-amber-400">σ</span> · <span class="text-rose-400">max drawdown</span> · <span class="text-sky-400">income</span>.
+      Model figures (incl. income) are approximate long-run history on your $${Math.round(assetBase).toLocaleString()} investable base.</p>
+    ${popRow(you, true)}${POPULAR.map(m=>popRow({...m, inc:{monthly:assetBase*(m.yld||0)/100/12, yieldPct:m.yld||0}},false)).join('')}
   </div>`;
 }
 function savedMixesCard(){
   const rows = mixes.length ? mixes.map((mx,i)=>
-    `<div class="flex items-center justify-between gap-2 py-2 border-b border-neutral-800 last:border-0">
+    `<div id="mixrow-${i}" class="flex items-center justify-between gap-2 py-2 px-2 -mx-2 rounded-lg border-b border-neutral-800 last:border-0">
       <div class="min-w-0">
-        <div class="text-sm truncate">${esc(mx.name)}</div>
+        <div class="text-sm truncate">${esc(mx.name)} <span id="mixactive-${i}" class="hidden align-middle text-[9px] px-1.5 py-0.5 rounded-full bg-violet-500/25 text-violet-200">● Active</span></div>
         <div id="mixstat-${i}" class="num text-[11px] text-neutral-500"></div>
       </div>
       <div class="flex flex-col items-end gap-1 shrink-0">
@@ -282,14 +295,27 @@ function mixRow(c){
 function mixCard(){
   // Persistent sum + Normalize row lives here (always shown → no page jump).
   return `<div class="card p-4">
-    <div class="flex items-center justify-between gap-2 mb-1">
-      <h2 class="font-semibold">Your target mix</h2>
-      <div class="flex items-center gap-2 shrink-0">
-        <span id="mixSum" class="num text-[11px]"></span>
-        <button id="normBtn" class="pill px-3 py-1 text-[11px] text-violet-200 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed">Normalize</button>
+    <div id="mixSentinel" style="height:1px"></div>
+    <div id="mixSticky" class="sticky top-0 z-20 bg-[#161618] -mx-4 px-4 pt-2 pb-2 mb-2 rounded-b-2xl">
+      <div class="flex items-center justify-between gap-2 mb-1">
+        <h2 id="mixTitle" class="font-semibold">Your target mix</h2>
+        <div class="flex items-center gap-2 shrink-0">
+          <span id="mixSum" class="num text-[11px]"></span>
+          <button id="normBtn" class="pill px-3 py-1 text-[11px] text-violet-200 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed">Normalize</button>
+        </div>
+      </div>
+      <div id="mixLive" class="grid grid-cols-5 gap-1 text-center rounded-lg bg-neutral-900/60 border border-neutral-800 py-2"></div>
+      <div id="growthWrap" class="mt-2">
+        <div class="flex items-center justify-end mb-1">
+          <div class="inline-flex text-[9px] rounded-full overflow-hidden border border-neutral-700">
+            <button id="gNom" class="px-2.5 py-0.5">Nominal</button>
+            <button id="gReal" class="px-2.5 py-0.5">Real</button>
+          </div>
+        </div>
+        <div id="growthBox"><canvas id="mixGrowth"></canvas></div>
+        <div id="growthCap" class="text-[10px] text-neutral-500 text-center mt-1"></div>
       </div>
     </div>
-    <div id="mixLive" class="grid grid-cols-5 gap-1 text-center mb-2 rounded-lg bg-neutral-900/60 border border-neutral-800 py-2"></div>
     <div class="flex items-center justify-between gap-2 mb-2">
       <p class="text-[11px] text-neutral-500">Set the % for each class. "pp" = points above/below your current.</p>
       <button id="matchBtn" class="text-[11px] text-neutral-400 hover:text-violet-300 shrink-0">match current</button>
@@ -356,7 +382,23 @@ function render(){
   document.querySelectorAll('[data-rename]').forEach(b=>b.onclick=()=>renameMix(+b.dataset.rename));
   document.querySelectorAll('[data-delmix]').forEach(b=>b.onclick=()=>delMix(+b.dataset.delmix));
   wireNorm();
+  setupSticky();
+  const gn=document.getElementById('gNom'), gr=document.getElementById('gReal');
+  if(gn) gn.onclick=()=>{ growthReal=false; drawGrowth(); };
+  if(gr) gr.onclick=()=>{ growthReal=true; drawGrowth(); };
   updateDerived();
+}
+// Toggle a compact "stuck" state on the target-mix header once it pins to the top
+// (sentinel scrolled above the viewport) → metrics shrink, growth chart grows taller.
+function setupSticky(){
+  const sent=document.getElementById('mixSentinel'), sticky=document.getElementById('mixSticky');
+  if(!sent||!sticky||!('IntersectionObserver' in window)) return;
+  if(window._mixIO) window._mixIO.disconnect();
+  window._mixIO=new IntersectionObserver(([e])=>{
+    sticky.classList.toggle('stuck', !e.isIntersecting && e.boundingClientRect.top<0);
+    if(growthChart) setTimeout(()=>growthChart.resize(), 180);
+  }, {threshold:[0,1]});
+  window._mixIO.observe(sent);
 }
 function clamp(v){return Math.max(0,Math.min(100,v));}
 function wireNorm(){ const nb=document.getElementById('normBtn'); if(nb)nb.onclick=()=>{
@@ -375,20 +417,58 @@ function updateDerived(){
   const nb=document.getElementById('normBtn'); if(nb) nb.disabled=on100;
   // live metrics preview inside the mix editor (updates as sliders move)
   const ml=document.getElementById('mixLive'); if(ml){ const t=metrics(targets);
-    const cell=(lbl,val,col)=>`<div><div class="text-[9px] uppercase tracking-wide text-neutral-500">${lbl}</div><div class="num text-sm font-semibold ${col}">${val}</div></div>`;
+    const cell=(lbl,val,col)=>`<div><div class="mlbl uppercase tracking-wide text-neutral-500">${lbl}</div><div class="mval num font-semibold ${col}">${val}</div></div>`;
     ml.innerHTML = cell('return',PCT(t.ret),'text-emerald-400')+cell('σ',PCT(t.dvol),'text-amber-400')
       +cell('max DD',PCT(t.ddiv),'text-rose-400')+cell('risk',t.riskScore.toFixed(1)+'/5',RISKC[Math.round(t.riskScore)]||'')
-      +cell('income',MON(t.inc.monthly),'text-sky-400'); }
+      +cell('income',`${MON(t.inc.monthly)}<span class="block text-[9px] font-normal text-neutral-500">${t.inc.yieldPct.toFixed(1)}% yield</span>`,'text-sky-400'); }
   // gaps
   classes.forEach(c=>{ const g=(targets[c.key]||0)-c.current_pct; const el=document.getElementById('gap-'+c.key);
     if(el){ el.textContent=(g>=0?'+':'')+g.toFixed(0)+'pp'; el.className=`text-[11px] num ${g>=0?'text-emerald-400/80':'text-rose-400/80'}`; } });
   // leverage hints
   classes.forEach(c=>{ const el=document.getElementById('lev-'+c.key); if(!el)return; const L=+c.lev||1; const e=eff(c);
     el.textContent = Math.abs(L-1)>0.05 ? `leveraged ${L}× → return ${e.ret.toFixed(0)}% · σ ${e.vol.toFixed(0)}% · max DD ${e.maxdd.toFixed(0)}%` : ''; });
-  // saved-mix stats (recompute under current assumptions)
-  mixes.forEach((mx,i)=>{ const el=document.getElementById('mixstat-'+i); if(!el)return; const m=metrics(mx.targets);
-    el.innerHTML=`<span class="text-emerald-400">${m.ret.toFixed(1)}%</span> · <span class="text-amber-400">σ${m.dvol.toFixed(0)}</span> · <span class="text-rose-400">${m.ddiv.toFixed(0)}%</span> · <span class="text-sky-400">${MON(m.inc.monthly)}</span>`; });
-  drawDonut(); drawFrontier();
+  // saved-mix stats (recompute under current assumptions) + mark the one matching the live target
+  const ak=classes.map(c=>c.key);
+  const matchIdx=mixes.findIndex(mx=>ak.every(k=>Math.abs((targets[k]||0)-((mx.targets||{})[k]||0))<0.01));
+  mixes.forEach((mx,i)=>{ const el=document.getElementById('mixstat-'+i); if(el){ const m=metrics(mx.targets);
+      el.innerHTML=`<span class="text-emerald-400">${m.ret.toFixed(1)}%</span> · <span class="text-amber-400">σ${m.dvol.toFixed(0)}</span> · <span class="text-rose-400">${m.ddiv.toFixed(0)}%</span> · <span class="text-sky-400">${INCY(m.inc)}</span>`; }
+    const row=document.getElementById('mixrow-'+i), b=document.getElementById('mixactive-'+i);
+    if(row) row.classList.toggle('bg-violet-500/10', i===matchIdx);
+    if(b) b.classList.toggle('hidden', i!==matchIdx); });
+  drawDonut(); drawFrontier(); drawGrowth();
+}
+// Growth projection: current base compounding at the mix's expected return, age → retirement.
+function growthSeries(ret){
+  const a0=+retireInfo.current_age, a1=+retireInfo.retire_age;
+  if(!a0||!a1||a1<=a0||!assetBase) return null;
+  const pts=[]; for(let a=a0;a<=a1;a++) pts.push({age:a, value:assetBase*Math.pow(1+ret/100, a-a0)});
+  return pts;
+}
+function drawGrowth(){
+  const cv=document.getElementById('mixGrowth'), cap=document.getElementById('growthCap'), wrap=document.getElementById('growthWrap');
+  if(!cv) return;
+  // toggle button styling
+  const on='bg-violet-500/30 text-violet-100', off='text-neutral-500';
+  const gn=document.getElementById('gNom'), gr=document.getElementById('gReal');
+  if(gn) gn.className=`px-2.5 py-0.5 ${growthReal?off:on}`;
+  if(gr) gr.className=`px-2.5 py-0.5 ${growthReal?on:off}`;
+  const infl=+retireInfo.inflation_pct||0;
+  const nominalRet=metrics(targets).ret, ret=growthReal?(nominalRet-infl):nominalRet;
+  const series=growthSeries(ret);
+  if(!series){ if(growthChart){growthChart.destroy();growthChart=null;} if(wrap)wrap.style.display='none'; return; }
+  if(wrap)wrap.style.display='';
+  const fmt=v=>v>=1e6?'$'+(v/1e6).toFixed(1)+'M':'$'+Math.round(v/1e3)+'k';
+  if(growthChart)growthChart.destroy();
+  growthChart=new Chart(cv,{type:'line',
+    data:{labels:series.map(p=>p.age), datasets:[{data:series.map(p=>p.value),
+      borderColor:'#38bdf8', backgroundColor:'rgba(56,189,248,0.12)', fill:true, pointRadius:0, pointHoverRadius:4, tension:0.25, borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{intersect:false,mode:'index'},
+      plugins:{legend:{display:false},tooltip:{callbacks:{title:i=>'Age '+i[0].label,label:i=>'$'+Math.round(i.parsed.y).toLocaleString()}}},
+      scales:{x:{ticks:{color:'#71717a',font:{size:9},maxTicksLimit:7},grid:{display:false}},
+        y:{ticks:{color:'#71717a',font:{size:9},maxTicksLimit:4,callback:fmt},grid:{color:'#1c1c1f'}}}}});
+  if(cap){ const end=series[series.length-1].value;
+    const note=growthReal?`${ret.toFixed(1)}%/yr real (${nominalRet.toFixed(1)}%−${infl}% inflation), today's $`:`${ret.toFixed(1)}%/yr nominal`;
+    cap.innerHTML=`$${Math.round(assetBase).toLocaleString()} today → <span class="text-sky-300 font-semibold">${fmt(end)}</span> at age ${retireInfo.retire_age} · ${note}, no contributions`; }
 }
 function drawDonut(){
   const cv=document.getElementById('allocPie'); if(!cv)return;
@@ -420,7 +500,8 @@ async function load(family){
   const r=await fetch(url()); const d=await r.json();
   classes=d.classes||[];
   borrow=(d.borrow!=null)?d.borrow:4;
-  assetBase=d.asset_base||0;
+  assetBase=(d.invest_base!=null?d.invest_base:d.asset_base)||0;   // investable base (excl. real estate)
+  retireInfo=d.retire||{};
   mixes=d.mixes||[];
   targets={};
   if(d.saved_targets){ classes.forEach(c=>targets[c.key]=d.saved_targets[c.key]||0); }

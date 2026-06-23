@@ -758,10 +758,15 @@ def allocation_calculator(family_id: str) -> dict:
     saved_stats = plan.get("stats") or {}
     re_lev = _re_leverage(snap) if snap else 1.0
     default_lev = {"real_estate": re_lev}   # all others unlevered (trade already baked in)
-    asset_base = 0
+    asset_base = 0      # full allocation base (incl. real-estate book equity)
+    re_equity = 0       # real-estate book equity within that base
     if snap:
-        asset_base = allocation(snap, load_target(family_id), load_holdings(family_id),
-                                config.load_app_config().get("fx_usd_cad", 1.0)).get("asset_base", 0)
+        al2 = allocation(snap, load_target(family_id), load_holdings(family_id),
+                         config.load_app_config().get("fx_usd_cad", 1.0))
+        asset_base = al2.get("asset_base", 0)
+        re_equity = next((r["actual_value"] for r in al2.get("rows", [])
+                          if r["category"] == "real_estate"), 0)
+    invest_base = max(0, asset_base - re_equity)   # investable/financial only (excl. illiquid RE)
     classes = []
     for k in ALLOC_ORDER:
         d = RESEARCHED_STATS[k]
@@ -774,12 +779,20 @@ def allocation_calculator(family_id: str) -> dict:
             "income_yield": s.get("income_yield", DEFAULT_INCOME_YIELD.get(k, 0)),
             "current_pct": round(current.get(k, 0), 1),
         })
+    # Retirement horizon for the growth projection (prefer saved inputs, else defaults).
+    ri = load_retirement_inputs(family_id)
+    if not (ri and ri.get("current_age") and ri.get("retire_age")):
+        ri = retirement_defaults(family_id)
+    retire = {"current_age": ri.get("current_age"), "retire_age": ri.get("retire_age"),
+              "inflation_pct": ri.get("inflation_pct", 3)}
     return {
         "classes": classes,
         "saved_targets": plan.get("targets"),
         "mixes": plan.get("mixes") or [],
         "borrow": plan.get("borrow") or DEFAULT_BORROW_RATE,
         "asset_base": round(asset_base),
+        "invest_base": round(invest_base),
+        "retire": retire,
         "currency": snap.get("currency", "CAD") if snap else "CAD",
     }
 
