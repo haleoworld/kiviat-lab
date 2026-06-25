@@ -471,7 +471,8 @@ def api_business_config(request: Request, family: Optional[str] = None,
                         _: None = Depends(require_api_auth)):
     fid = _retire_family(family)
     cfg = business.load_business_config(fid)
-    return JSONResponse({**cfg, "all_accounts": statements.ACCOUNTS,
+    return JSONResponse({**cfg, "all_accounts": statements.account_list(cfg),
+                         "credit_card_accounts": sorted(statements.credit_card_accounts(cfg)),
                          "categories": business.EXPENSE_CATEGORIES,
                          "category_tax": business.load_category_tax(fid),
                          "fiscal_year_bounds_example": {
@@ -489,7 +490,8 @@ async def api_business_config_save(request: Request, family: Optional[str] = Non
     if "category_tax" in body and isinstance(body["category_tax"], dict):
         out["category_tax"] = business.save_category_tax(fid, body["category_tax"])
     # fiscal-year / archived-accounts etc. go through the general saver
-    if any(k in body for k in ("fiscal_year_start_month", "fiscal_year_start_day", "archived_accounts")):
+    if any(k in body for k in ("fiscal_year_start_month", "fiscal_year_start_day",
+                               "archived_accounts", "accounts", "credit_card_accounts")):
         out["config"] = business.save_business_config(fid, body)
     return JSONResponse({"ok": True, **out})
 

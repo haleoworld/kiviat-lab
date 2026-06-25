@@ -88,7 +88,7 @@ def create_job(family_id: str, kind: str, account: str | None,
     """files: list of (filename, bytes). Saves the files + a job record (all items queued)."""
     if kind not in KINDS:
         raise business.ParseError("kind must be 'receipt' or 'statement'.", 400)
-    if kind == "statement" and account not in statements.ACCOUNTS:
+    if kind == "statement" and account not in statements.account_list(business.load_business_config(family_id)):
         raise business.ParseError("a valid account is required for statements.", 400)
     if not files:
         raise business.ParseError("no files in the upload.", 400)

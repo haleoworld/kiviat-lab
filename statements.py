@@ -44,15 +44,33 @@ ACCOUNTS = ["RBC Bank", "TD Bank", "Amex 1001", "Amex 1002", "Rogers Credit Card
 CREDIT_CARD_ACCOUNTS = {"Amex 1001", "Amex 1002", "Rogers Credit Card"}
 
 
-def account_kind(account: str) -> str:
-    return "credit card" if account in CREDIT_CARD_ACCOUNTS else "bank account"
+def account_list(cfg: dict | None = None) -> list[str]:
+    """All account names configured for this family. A family with a custom 'accounts' key
+    uses it (even when empty — a fresh business starts with none); legacy families that
+    predate per-family accounts fall back to the historical built-in list so existing books
+    keep working with no migration."""
+    cfg = cfg or {}
+    return list(cfg["accounts"]) if "accounts" in cfg else list(ACCOUNTS)
+
+
+def credit_card_accounts(cfg: dict | None = None) -> set[str]:
+    """Which of this family's accounts are credit cards (drives parsing/HST wording)."""
+    cfg = cfg or {}
+    if "accounts" in cfg:
+        return set(cfg.get("credit_card_accounts", []))
+    return set(CREDIT_CARD_ACCOUNTS)
+
+
+def account_kind(account: str, cfg: dict | None = None) -> str:
+    return "credit card" if account in credit_card_accounts(cfg) else "bank account"
 
 
 def active_accounts(cfg: dict | None = None) -> list[str]:
-    """Accounts offered for new imports — the canonical list minus any archived (e.g. a
+    """Accounts offered for new imports — the family's list minus any archived (e.g. a
     cancelled card). Archived accounts stay valid for historical data, just off the picker."""
-    archived = set((cfg or {}).get("archived_accounts", []))
-    return [a for a in ACCOUNTS if a not in archived]
+    cfg = cfg or {}
+    archived = set(cfg.get("archived_accounts", []))
+    return [a for a in account_list(cfg) if a not in archived]
 
 TABULAR_SUFFIXES = {".csv", ".xlsx"}
 IMAGE_SUFFIXES = set(extract.IMAGE_MEDIA_TYPES) | {".heic"}
@@ -419,7 +437,8 @@ def read_document(path: Path, family_id: str, account: str = "") -> tuple[list[d
     content_block = extract.build_content_block(path)   # suffix pre-validated by caller
     model = config.load_app_config()["extraction"]["model"]
     max_tokens = config.load_app_config()["extraction"]["max_tokens"]
-    prompt = _txn_prompt(account or "this account", account_kind(account))
+    prompt = _txn_prompt(account or "this account",
+                         account_kind(account, business.load_business_config(family_id)))
     client = Anthropic(api_key=api_key)
     try:
         msg = client.messages.create(
@@ -455,8 +474,10 @@ def ingest_statement(family_id: str, account: str, filename: str, data: bytes) -
     (the whole batch is one file, so there's no half-good state to salvage).
     """
     ensure_dirs(family_id)
-    if account not in ACCOUNTS:
-        raise ParseError(f"Unknown account '{account}'. Pick one of: {', '.join(ACCOUNTS)}.", 400)
+    accts = account_list(business.load_business_config(family_id))
+    if account not in accts:
+        valid = ", ".join(accts) or "(none configured — add one in Settings)"
+        raise ParseError(f"Unknown account '{account}'. Pick one of: {valid}.", 400)
     suffix = Path(filename or "").suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise ParseError(f"Unsupported file type '{suffix or '(none)'}' — use CSV, XLSX, PDF, JPG, PNG, or HEIC.", 400)
@@ -618,6 +639,6 @@ def overview(family_id: str) -> dict:
         r["fiscal_years"] = fys
         r["cross_fy"] = len(fys) > 1
     fy_bounds = {fy: business.fiscal_year_bounds(fy, cfg) for fy in all_fys}
-    return {"imports": imports, "accounts": active_accounts(cfg), "all_accounts": ACCOUNTS,
+    return {"imports": imports, "accounts": active_accounts(cfg), "all_accounts": account_list(cfg),
             "archived_accounts": cfg.get("archived_accounts", []), "config": cfg,
             "fiscal_years": sorted(all_fys, reverse=True), "fiscal_year_bounds": fy_bounds}

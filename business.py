@@ -73,6 +73,10 @@ def save_business_config(family_id: str, data: dict) -> dict:
         cfg["fiscal_year_start_day"] = d
     if isinstance((data or {}).get("archived_accounts"), list):
         cfg["archived_accounts"] = [str(x) for x in data["archived_accounts"]]
+    if isinstance((data or {}).get("accounts"), list):
+        cfg["accounts"] = [str(x) for x in data["accounts"]]
+    if isinstance((data or {}).get("credit_card_accounts"), list):
+        cfg["credit_card_accounts"] = [str(x) for x in data["credit_card_accounts"]]
     ensure_dirs(family_id)
     business_config_path(family_id).write_text(yaml.safe_dump(cfg, sort_keys=False))
     return cfg
@@ -100,7 +104,9 @@ def enable_business(family_id: str) -> dict:
     business config if none exists. Idempotent."""
     config.save_family_config(family_id, {"has_business": True})
     if not business_config_path(family_id).exists():
-        save_business_config(family_id, {})
+        # Scaffold with an explicit (empty) accounts key so a new business starts with no
+        # accounts rather than inheriting the legacy built-in fallback list.
+        save_business_config(family_id, {"accounts": [], "credit_card_accounts": []})
     return load_business_config(family_id)
 
 
