@@ -22,6 +22,9 @@ import paths
 APP_DEFAULTS: dict[str, Any] = {
     "retention_days": 15,
     "default_currency": "CAD",
+    # Local units per 1 USD, for USD-equivalent displays in non-CAD households.
+    # CAD tracks fx_usd_cad; add other currencies here (HKD is USD-pegged ~7.8).
+    "fx_local_per_usd": {"HKD": 7.8},
     "active_family": None,        # which family the CLI/app uses by default
     "extraction": {
         # Strong model by default — extraction accuracy is the whole product.
@@ -61,6 +64,15 @@ def load_app_config() -> dict[str, Any]:
             user_cfg = yaml.safe_load(f) or {}
         cfg = _deep_merge(cfg, user_cfg)
     return cfg
+
+
+def local_per_usd(currency: str) -> float | None:
+    """Units of `currency` per 1 USD, for USD-equivalent displays. CAD tracks fx_usd_cad;
+    other currencies come from fx_local_per_usd. None if no rate is configured."""
+    cfg = load_app_config()
+    if currency == "CAD":
+        return cfg.get("fx_usd_cad", 1.37)
+    return (cfg.get("fx_local_per_usd") or {}).get(currency)
 
 
 def load_family_config(family_id: str) -> dict[str, Any]:

@@ -901,6 +901,8 @@ def dca_plan(family_id: str) -> dict:
     snap = load_snapshot(family_id)
     settings = load_dca_settings(family_id)
     fx = config.load_app_config().get("fx_usd_cad", 1.0) or 1.0
+    cur = snap.get("currency", "CAD") if snap else "CAD"
+    usd_rate = config.local_per_usd(cur)   # local units per 1 USD (None if not configured)
     per_year = DCA_FREQS[settings["frequency"]]
     plan = load_alloc_plan(family_id)
     tg = plan.get("targets") or {}
@@ -953,7 +955,7 @@ def dca_plan(family_id: str) -> dict:
             "periods": periods,
             "direction": direction,
             "per_period_cad": round(per_cad),
-            "per_period_usd": round(per_cad / fx) if fx else None,
+            "per_period_usd": round(per_cad / usd_rate) if usd_rate else None,
         })
 
     return {
@@ -966,7 +968,8 @@ def dca_plan(family_id: str) -> dict:
         "freq_per_year": per_year,
         "freq_labels": DCA_FREQ_LABELS,
         "fx_usd_cad": fx,
-        "currency": snap.get("currency", "CAD") if snap else "CAD",
+        "usd_rate": usd_rate,
+        "currency": cur,
         "confidence": ac.get("confidence", "medium") if isinstance(ac, dict) else "medium",
         "has_targets": bool(tg),
     }

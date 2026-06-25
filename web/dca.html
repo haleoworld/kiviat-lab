@@ -95,7 +95,7 @@ function rowEl(r){
         </div>
         <div class="text-right shrink-0">
           <div class="text-emerald-400 font-bold text-lg num">${money(r.per_period_cad)}</div>
-          <div class="text-[11px] text-neutral-500 num">${data.currency==='CAD' ? '≈ US$'+(r.per_period_usd||0).toLocaleString()+' · ' : ''}${per}</div>
+          <div class="text-[11px] text-neutral-500 num">${r.per_period_usd!=null ? '≈ US$'+r.per_period_usd.toLocaleString()+' · ' : ''}${per}</div>
         </div>
       </div>
       <div class="flex items-center gap-2 mt-3 text-xs text-neutral-400">
@@ -145,7 +145,7 @@ function render(){
   document.querySelectorAll('select[data-k]').forEach(sel=>{
     sel.onchange=()=>{ const r=data.rows.find(x=>x.key===sel.dataset.k); if(r){ r.months=Math.max(1,parseInt(sel.value)||1);} queueSave(); };
   });
-  const fxTxt=`liquid base ${money(data.base)} · ${data.currency||'CAD'}${data.currency==='CAD' ? ' · FX '+data.fx_usd_cad : ''} · ${data.confidence} confidence`;
+  const fxTxt=`liquid base ${money(data.base)} · ${data.currency||'CAD'}${data.usd_rate ? ' · '+data.usd_rate+' '+(data.currency||'CAD')+'/USD' : ''} · ${data.confidence} confidence`;
   document.getElementById('meta').textContent=fxTxt;
 }
 
