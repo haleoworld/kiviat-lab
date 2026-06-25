@@ -80,13 +80,18 @@
     const want=sessionStorage.getItem('kiviat_family');
     return _fams.find(x=>x.id===want) || _fams.find(x=>x.active) || _fams[0] || null;
   }
-  window.kiviatRefreshNav=function(){
+  function _applyNav(){
     const f=_selectedFamily();
     if(f) document.getElementById('navFam').textContent=f.name;
     const biz=document.getElementById('navBiz');
     if(biz) biz.style.display=(f && f.has_business)?'':'none';
+  }
+  // Refetch so has_business changes (e.g. just added a business) reflect live; also re-applies
+  // the selected household. Cheap on localhost; called on family switch and after enabling.
+  window.kiviatRefreshNav=function(){
+    return fetch('api/families').then(r=>r.json()).then(j=>{ _fams=j.families||[]; _applyNav(); }).catch(()=>{});
   };
-  fetch('api/families').then(r=>r.json()).then(j=>{ _fams=j.families||[]; kiviatRefreshNav(); }).catch(()=>{});
+  kiviatRefreshNav();
 
   document.addEventListener('keydown',e=>{ if(e.key==='Escape')closeNav(); });
 

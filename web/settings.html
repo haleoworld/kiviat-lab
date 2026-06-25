@@ -42,11 +42,19 @@
       <button id="addBtn" class="pill px-4 py-2 text-sm text-neutral-200 hover:text-white mt-3">+ Add member</button>
     </section>
 
-    <section class="mt-9">
+    <section class="mt-9" id="corpSection">
       <div class="flex items-center justify-between mb-2">
         <h2 class="font-semibold">Corporation</h2>
         <span id="corpStatus" class="text-[11px] text-neutral-500"></span>
       </div>
+      <div id="corpAddPrompt" class="hidden">
+        <p class="text-xs text-neutral-500 mb-3 leading-relaxed">
+          This household doesn't have a business. Add one to track receipts, statements, HST
+          and the accountant export — kept fully separate from your other households.
+        </p>
+        <button id="addBizBtn" class="pill px-4 py-2 text-sm text-neutral-200 hover:text-white">+ Add a business / corporation</button>
+      </div>
+      <div id="corpCard">
       <p class="text-xs text-neutral-500 mb-3 leading-relaxed">
         Your <span class="text-neutral-300">fiscal year</span> drives the bookkeeping periods —
         fiscal-year labels on transactions, HST periods, and the accountant export. It's labelled
@@ -73,6 +81,7 @@
           <span id="reestStatus" class="text-[11px] ml-2 text-neutral-500"></span>
         </div>
       </div>
+      </div><!-- /corpCard -->
     </section>
 
     <footer class="mt-10 text-[11px] leading-relaxed text-neutral-600">
@@ -81,7 +90,8 @@
   </div>
 
 <script>
-let members = [], currentFamily = null, saveTimer = null;
+let members = [], currentFamily = null, saveTimer = null, familiesCache = [];
+function currentHasBiz(){ const f=familiesCache.find(x=>x.id===currentFamily); return !!(f && f.has_business); }
 const RELATIONSHIPS = ["self","spouse","partner","child","parent","other"];
 
 function ageFromBirthday(bday){
@@ -268,6 +278,13 @@ async function saveCatTax(){
   }catch(e){ setCatTaxStatus("error"); }
 }
 async function loadCorp(){
+  // Gate the whole Corporation card on whether this household has opted into a business.
+  const card=document.getElementById("corpCard"), prompt=document.getElementById("corpAddPrompt");
+  if(!currentHasBiz()){
+    card.classList.add("hidden"); prompt.classList.remove("hidden"); setCorpStatus("");
+    return;
+  }
+  card.classList.remove("hidden"); prompt.classList.add("hidden");
   try{ const r=await fetch(corpURL()); const d=await r.json();
     corp={fiscal_year_start_month:d.fiscal_year_start_month||7, fiscal_year_start_day:d.fiscal_year_start_day||1, archived_accounts:d.archived_accounts||[]};
     allAccounts=d.all_accounts||[];
@@ -285,6 +302,7 @@ async function saveCorp(){
 
 async function loadFamilies(){
   const r = await fetch("api/families"); const d = await r.json();
+  familiesCache = d.families || [];
   const sel = document.getElementById("familySel");
   let _want=sessionStorage.getItem('kiviat_family'); if(!_want||!d.families.some(f=>f.id===_want)) _want=d.active;
   sel.innerHTML = d.families.map(f=>`<option value="${f.id}" ${f.id===_want?"selected":""}>${f.name}</option>`).join("");
@@ -301,6 +319,17 @@ async function loadMembers(family){
   render(); setSaveStatus("idle");
   loadCorp();
 }
+document.getElementById("addBizBtn").addEventListener("click", async ()=>{
+  const btn=document.getElementById("addBizBtn"); btn.disabled=true; btn.textContent="Adding…";
+  try{
+    const q=currentFamily?`?family=${encodeURIComponent(currentFamily)}`:"";
+    const r=await fetch("api/business/enable"+q,{method:"POST"});
+    if(!r.ok) throw 0;
+    const f=familiesCache.find(x=>x.id===currentFamily); if(f) f.has_business=true;
+    window.kiviatRefreshNav&&kiviatRefreshNav();   // reveal the BUSINESS menu live
+    loadCorp();                                     // swap the prompt for the real card
+  }catch(e){ btn.disabled=false; btn.textContent="+ Add a business / corporation"; setCorpStatus("error"); }
+});
 document.getElementById("reestBtn").addEventListener("click", async ()=>{
   const st=document.getElementById("reestStatus"); st.textContent="Re-estimating…";
   try{
