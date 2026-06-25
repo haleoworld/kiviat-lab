@@ -494,7 +494,7 @@ async function loadFamilies(){
   const sel=document.getElementById('familySel');
   let _want=sessionStorage.getItem('kiviat_family'); if(!_want||!d.families.some(f=>f.id===_want)) _want=d.active;
   sel.innerHTML=d.families.map(f=>`<option value="${f.id}" ${f.id===_want?'selected':''}>${f.name}</option>`).join('');
-  sel.onchange=()=>{ sessionStorage.setItem('kiviat_family', sel.value); load(sel.value); }; load(sel.value||_want);
+  sel.onchange=()=>{ sessionStorage.setItem('kiviat_family', sel.value); window.kiviatRefreshNav&&kiviatRefreshNav(); load(sel.value); }; load(sel.value||_want);
 }
 async function load(family){
   currentFamily=family||null;
