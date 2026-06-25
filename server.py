@@ -231,7 +231,8 @@ def api_families(request: Request, _: None = Depends(require_api_auth)):
     active = config.load_app_config().get("active_family")
     for fid in paths.list_families():
         fcfg = config.load_family_config(fid)
-        fams.append({"id": fid, "name": fcfg.get("name") or fid, "active": fid == active})
+        fams.append({"id": fid, "name": fcfg.get("name") or fid, "active": fid == active,
+                     "has_business": business.family_has_business(fid)})
     return {"families": fams, "active": active}
 
 
@@ -455,6 +456,15 @@ def api_business_file(rid: str, request: Request, family: Optional[str] = None):
 
 
 # ---------- business: config (fiscal year) ----------
+
+@app.post("/api/business/enable")
+def api_business_enable(request: Request, family: Optional[str] = None,
+                        _: None = Depends(require_api_auth)):
+    """Opt a family into the bookkeeping / corporation module."""
+    fid = _retire_family(family)
+    cfg = business.enable_business(fid)
+    return JSONResponse({"ok": True, "has_business": True, **cfg})
+
 
 @app.get("/api/business/config")
 def api_business_config(request: Request, family: Optional[str] = None,

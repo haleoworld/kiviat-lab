@@ -78,6 +78,32 @@ def save_business_config(family_id: str, data: dict) -> dict:
     return cfg
 
 
+def family_has_business(family_id: str) -> bool:
+    """Whether this family has opted into the bookkeeping / corporation module.
+
+    True if explicitly enabled in family.yaml (has_business: true), OR — for families that
+    predate the flag — if business data already exists on disk. This keeps existing books
+    (e.g. the household) working without a migration step, while new families start off."""
+    fcfg = config.load_family_config(family_id)
+    if fcfg.get("has_business"):
+        return True
+    if business_config_path(family_id).exists():
+        return True
+    for p in (receipts_path(family_id), business_dir(family_id) / "statements.jsonl"):
+        if p.exists() and p.stat().st_size > 0:
+            return True
+    return False
+
+
+def enable_business(family_id: str) -> dict:
+    """Turn the bookkeeping module on for a family: set the flag and scaffold a default
+    business config if none exists. Idempotent."""
+    config.save_family_config(family_id, {"has_business": True})
+    if not business_config_path(family_id).exists():
+        save_business_config(family_id, {})
+    return load_business_config(family_id)
+
+
 def fiscal_year_of(date_str, cfg: dict | None = None):
     """The fiscal year (labelled by the calendar year it ENDS in) that a YYYY-MM-DD date falls
     in. Correct for any start date incl. Jan 1 (calendar-year accounting). None if unparseable."""

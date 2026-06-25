@@ -73,6 +73,22 @@ def load_family_config(family_id: str) -> dict[str, Any]:
     return cfg
 
 
+def save_family_config(family_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """Merge `updates` into the family's on-disk config (family.yaml) and return the merged
+    raw config. Only the existing file is merged (not FAMILY_DEFAULTS), so we never persist
+    the full default tree into the file."""
+    cfile = paths.family_config_file(family_id)
+    existing: dict[str, Any] = {}
+    if cfile.exists():
+        with open(cfile) as f:
+            existing = yaml.safe_load(f) or {}
+    merged = _deep_merge(existing, updates)
+    cfile.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfile, "w") as f:
+        yaml.safe_dump(merged, f, sort_keys=False)
+    return merged
+
+
 def load_members(family_id: str) -> list[dict[str, Any]]:
     mfile = paths.members_file(family_id)
     if not mfile.exists():
