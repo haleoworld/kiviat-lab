@@ -328,7 +328,7 @@ def account_allocation(snap: dict, holdings: list = None, fx_usd_cad: float = 1.
     rows = []
     for name, a in accts.items():
         mix = [{"label": CATEGORY_LABELS.get(c, c), "value": round(v),
-                "pct": round(100 * v / a["value"])}
+                "pct": round(100 * v / a["value"]) if a["value"] else 0}
                for c, v in sorted(a["by_cat"].items(), key=lambda kv: -kv[1])]
         rows.append({"account": name, "value": round(a["value"]),
                      "pct": round(100 * a["value"] / total, 1), "mix": mix})
