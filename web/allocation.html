@@ -65,7 +65,7 @@ const RISKC={1:"text-emerald-400",2:"text-emerald-300",3:"text-amber-400",4:"tex
 const COLORS={cash:"#737373",tbill:"#a3a3a3",bonds:"#818cf8",real_estate:"#60a5fa",equities_dividend:"#34d399",gold:"#fbbf24",
   equities_uncat:"#22d3ee",equities_growth:"#a78bfa",equities_trade:"#f472b6",crypto:"#f87171"};
 
-let classes=[], targets={}, mixes=[], currentFamily=null, saveTimer=null, donut=null, frontChart=null, borrow=4, assetBase=0, retireInfo={}, growthChart=null, growthReal=false;
+let classes=[], targets={}, mixes=[], presets=[], currentFamily=null, saveTimer=null, donut=null, frontChart=null, borrow=4, assetBase=0, retireInfo={}, growthChart=null, growthReal=false;
 const MON=(n)=>'$'+Math.round(n||0).toLocaleString()+'/mo';
 const INCY=(inc)=>MON(inc.monthly)+' · '+(inc.yieldPct||0).toFixed(1)+'%';
 
@@ -245,6 +245,51 @@ function savedMixesCard(){
     ${rows}
   </div>`;
 }
+// ---- shared preset library (cross-household) ----
+async function loadPresets(){
+  try{ const r=await fetch("api/allocation/presets"); const d=await r.json(); presets=d.presets||[]; }
+  catch(e){ presets=[]; }
+}
+function presetLibCard(){
+  const rows = presets.length ? presets.map((p,i)=>{
+    const m=metrics(p.targets||{});
+    return `<div class="flex items-center justify-between gap-2 py-2 px-2 -mx-2 rounded-lg border-b border-neutral-800 last:border-0">
+      <div class="min-w-0">
+        <div class="text-sm truncate">${esc(p.name)}</div>
+        <div class="num text-[11px] text-neutral-500"><span class="text-emerald-400">${m.ret.toFixed(1)}%</span> · <span class="text-amber-400">σ${m.dvol.toFixed(0)}</span> · <span class="text-rose-400">${m.ddiv.toFixed(0)}%</span> · <span class="text-sky-400">${INCY(m.inc)}</span></div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button data-adopt="${i}" class="pill px-3 py-1 text-[11px] text-violet-200 hover:text-white">Adopt</button>
+        <button data-delpreset="${i}" class="text-[10px] text-neutral-500 hover:text-rose-300">delete</button>
+      </div></div>`;
+  }).join('') : `<p class="text-xs text-neutral-600 py-1">No shared presets yet — tune a plan, then "Save to library" to reuse it across households.</p>`;
+  return `<div class="card p-4">
+    <div class="flex items-center justify-between mb-1"><h2 class="font-semibold">Preset library <span class="text-[10px] text-neutral-500 font-normal">· shared across households</span></h2>
+      <button id="savePresetBtn" class="pill px-3 py-1 text-[11px] text-emerald-200 hover:text-white">+ Save to library</button></div>
+    <p class="text-[11px] text-neutral-500 mb-2">Adopt copies a preset's weights &amp; assumptions into this household — then edit freely; other households are unaffected. Metrics use this household's assumptions.</p>
+    ${rows}
+  </div>`;
+}
+function savePreset(){
+  const name=(prompt("Name this preset (saved to the shared library):", "")||'').trim();
+  if(!name) return;
+  fetch("api/allocation/presets",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({name, targets, stats:statsPayload(), borrow})})
+    .then(r=>r.json()).then(d=>{ presets=d.presets||presets; render(); }).catch(()=>{});
+}
+async function adoptPreset(i){
+  const p=presets[i]; if(!p) return;
+  if(!confirm(`Adopt "${p.name}" into this household? It replaces your current target weights and assumptions (your saved mixes are kept).`)) return;
+  await fetch("api/allocation/presets/adopt"+(currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""),
+    {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:p.name})});
+  await load(currentFamily);
+}
+function delPreset(i){
+  const p=presets[i]; if(!p) return;
+  if(!confirm(`Delete shared preset "${p.name}"? This removes it from the library for all households.`)) return;
+  fetch("api/allocation/presets?name="+encodeURIComponent(p.name),{method:"DELETE"})
+    .then(r=>r.json()).then(d=>{ presets=d.presets||[]; render(); }).catch(()=>{});
+}
 function donutCard(){
   return `<div class="card p-4">
     <h2 class="font-semibold mb-2">Target mix</h2>
@@ -356,7 +401,7 @@ function statsCard(){
 function render(){
   document.getElementById('content').innerHTML =
     `<div class="flex items-center justify-end mb-1"><span id="saveStatus" class="text-[11px] text-neutral-500"></span></div>`
-    + summaryCard()+popularCard()+frontierCard()+donutCard()+mixCard()+savedMixesCard()+statsCard();
+    + summaryCard()+popularCard()+frontierCard()+donutCard()+mixCard()+savedMixesCard()+presetLibCard()+statsCard();
   // wire target inputs
   document.querySelectorAll('[data-t]').forEach(inp=>inp.addEventListener('input',e=>{
     const k=e.target.dataset.t; targets[k]=clamp(parseFloat(e.target.value.replace(/[^0-9.\-]/g,''))||0);
@@ -377,6 +422,9 @@ function render(){
   const mb=document.getElementById('matchBtn'); if(mb)mb.onclick=()=>{ classes.forEach(c=>targets[c.key]=c.current_pct); render(); scheduleSave(); };
   const rs=document.getElementById('resetStats'); if(rs)rs.onclick=async()=>{ await saveNow({}); await load(currentFamily); };
   const smb=document.getElementById('saveMixBtn'); if(smb)smb.onclick=saveMix;
+  const spb=document.getElementById('savePresetBtn'); if(spb)spb.onclick=savePreset;
+  document.querySelectorAll('[data-adopt]').forEach(b=>b.onclick=()=>adoptPreset(+b.dataset.adopt));
+  document.querySelectorAll('[data-delpreset]').forEach(b=>b.onclick=()=>delPreset(+b.dataset.delpreset));
   document.querySelectorAll('[data-load]').forEach(b=>b.onclick=()=>loadMix(+b.dataset.load));
   document.querySelectorAll('[data-overwrite]').forEach(b=>b.onclick=()=>overwriteMix(+b.dataset.overwrite));
   document.querySelectorAll('[data-rename]').forEach(b=>b.onclick=()=>renameMix(+b.dataset.rename));
@@ -507,6 +555,7 @@ async function load(family){
   targets={};
   if(d.saved_targets){ classes.forEach(c=>targets[c.key]=d.saved_targets[c.key]||0); }
   else { classes.forEach(c=>targets[c.key]=c.current_pct); }   // start from current mix
+  await loadPresets();
   const sel=document.getElementById('familySel');
   document.getElementById('meta').textContent=`${sel.options[sel.selectedIndex]?.text||''} · ${d.saved_targets?'saved plan':'from current mix'} · ${d.currency||'CAD'}`;
   render();
