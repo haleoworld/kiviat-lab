@@ -70,6 +70,11 @@
         <div class="mt-4 pt-4 border-t border-neutral-800">
           <div class="text-[11px] text-neutral-500 mb-2">Accounts <span class="text-neutral-600">— tap to archive a cancelled card (kept for past years, hidden from new imports)</span></div>
           <div id="acctChips" class="flex flex-wrap gap-2"></div>
+          <div class="flex items-center gap-2 mt-3">
+            <input id="newAcct" placeholder="Add an account…" class="fld px-3 py-2 text-sm flex-1" />
+            <select id="newAcctType" class="fld px-2 py-2 text-sm w-28"><option value="bank">Bank</option><option value="credit">Credit card</option></select>
+            <button id="addAcctBtn" class="pill px-3 py-2 text-sm text-neutral-200 hover:text-white">+ Add</button>
+          </div>
         </div>
         <div class="mt-4 pt-4 border-t border-neutral-800">
           <div class="flex items-center justify-between mb-2">
@@ -201,7 +206,7 @@ document.getElementById("addBtn").addEventListener("click", ()=>{
 
 // ---- Corporation: fiscal year ----
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-let corp = { fiscal_year_start_month:7, fiscal_year_start_day:1, archived_accounts:[] }, allAccounts=[], corpTimer=null;
+let corp = { fiscal_year_start_month:7, fiscal_year_start_day:1, archived_accounts:[] }, allAccounts=[], creditAccounts=[], corpTimer=null;
 function corpURL(){ const q = currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; return "api/business/config"+q; }
 
 function fyOf(date, sm, sd){
@@ -234,10 +239,11 @@ function wireCorp(){
 }
 function renderAcctChips(){
   const wrap=document.getElementById("acctChips"); if(!wrap) return;
-  const arch=new Set(corp.archived_accounts||[]);
+  const arch=new Set(corp.archived_accounts||[]); const cc=new Set(creditAccounts||[]);
+  if(!allAccounts.length){ wrap.innerHTML='<span class="text-[12px] text-neutral-500">No accounts yet — add one below.</span>'; return; }
   wrap.innerHTML = allAccounts.map(a=>{
-    const isA=arch.has(a);
-    return `<button data-acct="${a}" class="pill px-3 py-1.5 text-[12px] ${isA?'text-neutral-500 line-through opacity-70':'text-neutral-200'}">${a}${isA?' · archived':''}</button>`;
+    const isA=arch.has(a); const type=cc.has(a)?'card':'bank';
+    return `<button data-acct="${a}" class="pill px-3 py-1.5 text-[12px] ${isA?'text-neutral-500 line-through opacity-70':'text-neutral-200'}">${a} · ${type}${isA?' · archived':''}</button>`;
   }).join("");
   wrap.querySelectorAll("[data-acct]").forEach(b=>b.onclick=()=>toggleAcct(b.dataset.acct));
 }
@@ -247,6 +253,14 @@ function toggleAcct(name){
   corp.archived_accounts=[...arch];
   renderAcctChips(); setCorpStatus("saving"); clearTimeout(corpTimer); corpTimer=setTimeout(saveCorp,300);
 }
+document.getElementById("addAcctBtn").addEventListener("click", ()=>{
+  const inp=document.getElementById("newAcct"); const name=(inp.value||"").trim();
+  if(!name || allAccounts.includes(name)){ inp.value=""; return; }
+  allAccounts.push(name);
+  if(document.getElementById("newAcctType").value==="credit") creditAccounts.push(name);
+  inp.value=""; renderAcctChips();
+  setCorpStatus("saving"); clearTimeout(corpTimer); corpTimer=setTimeout(saveCorp,300);
+});
 let catTax={}, catList=[], catTaxTimer=null;
 function renderCatTax(){
   const wrap=document.getElementById("catTaxList"); if(!wrap) return;
@@ -287,7 +301,7 @@ async function loadCorp(){
   card.classList.remove("hidden"); prompt.classList.add("hidden");
   try{ const r=await fetch(corpURL()); const d=await r.json();
     corp={fiscal_year_start_month:d.fiscal_year_start_month||7, fiscal_year_start_day:d.fiscal_year_start_day||1, archived_accounts:d.archived_accounts||[]};
-    allAccounts=d.all_accounts||[];
+    allAccounts=d.all_accounts||[]; creditAccounts=d.credit_card_accounts||[];
     catTax=d.category_tax||{}; catList=d.categories||[];
     wireCorp(); renderAcctChips(); renderCatTax(); setCorpStatus("idle");
   }catch(e){ /* leave defaults */ }
@@ -295,7 +309,8 @@ async function loadCorp(){
 async function saveCorp(){
   try{ const r=await fetch(corpURL(),{method:"PUT",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({fiscal_year_start_month:corp.fiscal_year_start_month,
-        fiscal_year_start_day:corp.fiscal_year_start_day, archived_accounts:corp.archived_accounts||[]})});
+        fiscal_year_start_day:corp.fiscal_year_start_day, archived_accounts:corp.archived_accounts||[],
+        accounts:allAccounts, credit_card_accounts:creditAccounts})});
     if(!r.ok) throw 0; setCorpStatus("saved");
   }catch(e){ setCorpStatus("error"); }
 }
