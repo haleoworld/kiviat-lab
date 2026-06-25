@@ -348,6 +348,42 @@ async def api_allocation_save(request: Request, family: Optional[str] = None,
     return JSONResponse({"ok": True, **views.save_alloc_plan(fid, body)})
 
 
+@app.get("/api/allocation/presets")
+def api_alloc_presets(request: Request, _: None = Depends(require_api_auth)):
+    return JSONResponse({"presets": views.load_alloc_presets()})
+
+
+@app.post("/api/allocation/presets")
+async def api_alloc_preset_save(request: Request, _: None = Depends(require_api_auth)):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected a JSON object")
+    try:
+        presets = views.add_alloc_preset(body.get("name"), body.get("targets"),
+                                          body.get("stats"), body.get("borrow"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return JSONResponse({"ok": True, "presets": presets})
+
+
+@app.delete("/api/allocation/presets")
+def api_alloc_preset_delete(request: Request, name: str,
+                            _: None = Depends(require_api_auth)):
+    return JSONResponse({"ok": True, "presets": views.delete_alloc_preset(name)})
+
+
+@app.post("/api/allocation/presets/adopt")
+async def api_alloc_preset_adopt(request: Request, family: Optional[str] = None,
+                                 _: None = Depends(require_api_auth)):
+    fid = _retire_family(family)
+    body = await request.json()
+    try:
+        plan = views.adopt_alloc_preset(fid, body.get("name"))
+    except KeyError:
+        raise HTTPException(404, "no such preset")
+    return JSONResponse({"ok": True, **plan})
+
+
 @app.get("/api/allocation/dca")
 def api_dca(request: Request, family: Optional[str] = None,
             _: None = Depends(require_api_auth)):

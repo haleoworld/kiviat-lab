@@ -735,6 +735,54 @@ def save_alloc_plan(family_id: str, data: dict) -> dict:
     return plan
 
 
+# ---------- global allocation-preset library ----------
+# Named, saved plans (target weights + per-class assumptions + borrow), shared across all
+# households. Stored once at the data root. Adopting a preset COPIES it into a household's
+# plan (a snapshot — no live link), so households stay strictly isolated after adopting.
+ALLOC_PRESETS_FILE = paths.DATA_ROOT / "allocation_presets.yaml"
+
+
+def load_alloc_presets() -> list[dict]:
+    if not ALLOC_PRESETS_FILE.exists():
+        return []
+    data = yaml.safe_load(ALLOC_PRESETS_FILE.read_text()) or {}
+    return data.get("presets", []) if isinstance(data, dict) else []
+
+
+def save_alloc_presets(presets: list[dict]) -> list[dict]:
+    ALLOC_PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ALLOC_PRESETS_FILE.write_text(yaml.safe_dump({"presets": presets}, sort_keys=False, allow_unicode=True))
+    return presets
+
+
+def add_alloc_preset(name: str, targets, stats, borrow) -> list[dict]:
+    """Publish a named preset to the global library. Same name overwrites (an update)."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("preset name required")
+    presets = [p for p in load_alloc_presets() if p.get("name") != name]
+    presets.append({"name": name, "targets": targets or {}, "stats": stats or {}, "borrow": borrow})
+    return save_alloc_presets(presets)
+
+
+def delete_alloc_preset(name: str) -> list[dict]:
+    return save_alloc_presets([p for p in load_alloc_presets() if p.get("name") != name])
+
+
+def adopt_alloc_preset(family_id: str, name: str) -> dict:
+    """Copy a global preset into a household's plan (snapshot, not a live link). Replaces
+    targets/stats/borrow; preserves the household's own saved mixes."""
+    preset = next((p for p in load_alloc_presets() if p.get("name") == name), None)
+    if preset is None:
+        raise KeyError(name)
+    plan = load_alloc_plan(family_id)
+    plan["targets"] = preset.get("targets") or {}
+    plan["stats"] = preset.get("stats") or {}
+    if preset.get("borrow") is not None:
+        plan["borrow"] = preset.get("borrow")
+    return save_alloc_plan(family_id, plan)
+
+
 def allocation_calculator(family_id: str) -> dict:
     """Per-class researched stats merged with any saved edits, the family's CURRENT
     allocation %, and any saved target mix — everything the calculator page needs."""
