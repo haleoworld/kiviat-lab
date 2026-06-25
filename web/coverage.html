@@ -210,7 +210,8 @@ async function load(){
   document.getElementById("live").textContent="loading…";
   try{
     const fr=await fetch("api/families"); const fd=await fr.json();
-    const fam=(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
+    const _want=sessionStorage.getItem('kiviat_family');
+    const fam=(fd.families||[]).find(x=>x.id===_want)||(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
     currentFamily=fam?fam.id:null;
     const r=await fetch(`api/business/coverage${famQ()}`); data=await r.json();
     populateFilters(); render();

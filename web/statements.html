@@ -272,7 +272,8 @@ drop.addEventListener("drop", e=>{ if(e.dataTransfer.files.length) upload(e.data
 async function load(){
   try{
     const fr=await fetch("api/families"); const fd=await fr.json();
-    const fam=(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
+    const _want=sessionStorage.getItem('kiviat_family');
+    const fam=(fd.families||[]).find(x=>x.id===_want)||(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
     currentFamily = fam?fam.id:null;
     const r=await fetch(`api/business/statements${famQ()}`); const d=await r.json();
     imports=d.imports||[]; accounts=d.accounts||[]; fiscalYears=d.fiscal_years||[]; fyBounds=d.fiscal_year_bounds||{};
