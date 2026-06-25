@@ -17,7 +17,14 @@ go-ahead. Track B (preset library) planned, not started. (2026-06-24)
 - Verified: API isolation (sister 0 / household 105), enable flips flag + scaffolds,
   all JS parse-clean. Browser visual confirm pending with Terry.
 
-## Per-household accounts (PLANNED — kills global statements.ACCOUNTS)
+## Per-household accounts (DONE, commits f70d6f2, be0142a)
+Backend: accounts + credit_card_accounts per family in business config; legacy
+fallback for pre-change families; household migrated into its own config; new
+business families scaffold EMPTY accounts. Settings UI: chips show type/archived,
+"+ Add account" (name + bank/credit), full round-trip save. Verified: household
+keeps its 5 (typed), new family empty, add persists, cross-family isolation holds.
+
+## Per-household accounts — original plan (PLANNED — kills global statements.ACCOUNTS)
 Decisions: archive-only (never hard-delete; statements store account NAME → deletion
 orphans history); migrate household's 5 accounts into its business config so they
 become editable per-family data; new business families start with EMPTY accounts;
