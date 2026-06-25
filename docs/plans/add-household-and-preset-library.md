@@ -2,7 +2,16 @@
 
 **Status:** Track A done. Nav-persistence fix done. Track C (business gating &
 scoping) done & committed — chunks 1-4. Per-household accounts: planned, awaiting
-go-ahead. Track B (preset library) planned, not started. (2026-06-24)
+go-ahead. Track B (shared preset library) DONE & committed (094c46a, 3fa53c3). (2026-06-24)
+
+## Track B — global shared allocation-preset library (DONE)
+Global data/allocation_presets.yaml; preset = {name, targets, stats, borrow}.
+views: load/save/add/delete_alloc_preset + adopt_alloc_preset (copy snapshot into a
+household's plan — replaces targets/stats/borrow, preserves the household's mixes).
+server: GET/POST/DELETE /api/allocation/presets + POST .../presets/adopt.
+allocation.html: "Preset library" card — list w/ metrics, Adopt, delete, Save to
+library. Verified: save→list→adopt→edit-household leaves preset unchanged (snapshot,
+no live link); cross-household isolation holds.
 
 ## Track C — gate & scope the business module (DONE, commits 3378dd6..5955ff5)
 - has_business signal: flag in family.yaml, inferred true for families with existing
