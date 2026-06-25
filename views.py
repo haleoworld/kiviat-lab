@@ -966,6 +966,7 @@ def dca_plan(family_id: str) -> dict:
         "freq_per_year": per_year,
         "freq_labels": DCA_FREQ_LABELS,
         "fx_usd_cad": fx,
+        "currency": snap.get("currency", "CAD") if snap else "CAD",
         "confidence": ac.get("confidence", "medium") if isinstance(ac, dict) else "medium",
         "has_targets": bool(tg),
     }
