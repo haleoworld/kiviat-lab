@@ -84,6 +84,11 @@ const STATUS={
 function recLink(m){ return `<a href="${fileURL(m.id)}" target="_blank" class="text-right block">
   <div class="text-[12px] text-neutral-200 truncate max-w-[150px]">${esc(m.vendor||"receipt")}</div>
   <div class="text-[10px] text-neutral-500">${money(m.total)} · ${esc(m.date||"")}</div></a>`; }
+function catOpts(cur){
+  const o=[`<option value="">— category —</option>`];
+  (data.categories||[]).forEach(c=>o.push(`<option value="${esc(c)}" ${c===cur?"selected":""}>${esc(c)}</option>`));
+  return o.join("");
+}
 function rowHTML(r){
   const [lbl,cls]=STATUS[r.status]||STATUS.missing;
   const m=r.match;
@@ -110,6 +115,7 @@ function rowHTML(r){
           ${r.reconciled?`<span class="text-[9px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-300">✓</span>`:""}
         </div>
         <div class="text-[11px] text-neutral-500 truncate">${esc(r.date||"")} · ${esc(r.account||"")} · ${esc(r.description||"")}</div>
+        <div class="mt-1"><select data-cat="${r.id}" class="fld text-[11px] px-1.5 py-0.5 max-w-[210px] ${r.category?'':'text-neutral-500'}">${catOpts(r.category)}</select></div>
       </div>
       ${right}
     </div>
@@ -132,6 +138,7 @@ function render(){
       <span class="text-violet-300">💡 ${s.suggested||0} suggested</span>
       <span class="text-amber-300">❓ ${s.missing||0} missing</span>
       <span class="text-sky-300">∅ ${s.no_receipt||0} no-receipt</span>
+      <span class="text-neutral-400">🏷 ${s.uncategorized||0} uncategorized</span>
       <span class="text-neutral-400">📄 ${s.orphans||0} unmatched receipts</span>
     </div>`;
 
@@ -145,6 +152,7 @@ function render(){
   document.querySelectorAll("[data-confirm]").forEach(b=>b.addEventListener("click",()=>{const [tid,rid]=b.dataset.confirm.split(":");doLink(tid,rid);}));
   document.querySelectorAll("[data-unlink]").forEach(b=>b.addEventListener("click",()=>doUnlink(b.dataset.unlink)));
   document.querySelectorAll("[data-pick]").forEach(b=>b.addEventListener("click",()=>openPicker(b.dataset.pick)));
+  document.querySelectorAll("[data-cat]").forEach(sel=>sel.addEventListener("change",()=>setCategory(sel.dataset.cat,sel.value)));
 
   const ow=document.getElementById("orphanWrap");
   if((data.orphans||[]).length){
@@ -167,6 +175,12 @@ async function setNoReceipt(id,val){
       headers:{"Content-Type":"application/json"},body:JSON.stringify({no_receipt:val})});
     await load();
   }catch(e){ document.getElementById("live").textContent="couldn't update"; }
+}
+async function setCategory(id,val){
+  try{ await fetch(`api/business/statements/txn/${id}${famQ()}`,{method:"PUT",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({category:val})});
+    document.getElementById("live").textContent="category saved";
+  }catch(e){ document.getElementById("live").textContent="couldn't save category"; }
 }
 async function doLink(tid,rid){
   try{ await post("api/business/coverage/link",{txn_id:tid,receipt_id:rid}); await load(); }

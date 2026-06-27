@@ -102,6 +102,7 @@ def coverage(family_id: str) -> dict:
         "suggested": sum(1 for x in need_rows if x["status"] == "suggested"),
         "missing": sum(1 for x in need_rows if x["status"] == "missing"),
         "no_receipt": sum(1 for x in rows if x["status"] == "no_receipt"),
+        "uncategorized": sum(1 for x in rows if not x.get("category")),
         "orphans": len(orphans),
         "amt_total": amt(need_rows),
         "amt_linked": amt([x for x in need_rows if x["status"] == "linked"]),
@@ -109,13 +110,14 @@ def coverage(family_id: str) -> dict:
     }
     fys = sorted({x["fiscal_year"] for x in rows if x.get("fiscal_year") is not None}, reverse=True)
     return {"rows": rows, "orphans": orphans, "summary": summary,
-            "accounts": statements.active_accounts(cfg), "fiscal_years": fys}
+            "accounts": statements.active_accounts(cfg), "fiscal_years": fys,
+            "categories": business.ALL_CATEGORIES}
 
 
 def _txn_row(t: dict, cfg: dict, status: str, match) -> dict:
     return {"id": t["id"], "account": t.get("account"), "date": t.get("date"),
             "amount": t.get("amount"), "direction": t.get("direction"),
-            "description": t.get("description"),
+            "description": t.get("description"), "category": t.get("category") or "",
             "fiscal_year": business.fiscal_year_of(t.get("date"), cfg),
             "reconciled": bool(t.get("reconciled")), "status": status, "match": match}
 
@@ -157,6 +159,8 @@ def link_receipt(family_id: str, txn_id: str, receipt_id: str) -> dict | None:
         if rr["id"] == receipt_id:
             rr["matched_txn_id"] = txn_id
     t["matched_receipt_id"], t["reconciled"] = receipt_id, True
+    if not t.get("category") and r.get("category"):   # inherit the receipt's bucket, never overwrite a manual one
+        t["category"] = r["category"]
     statements._write_jsonl(statements.statements_path(family_id), txns)
     business._write_receipts(family_id, recs)
     return t

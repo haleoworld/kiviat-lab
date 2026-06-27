@@ -542,7 +542,7 @@ def ingest_statement(family_id: str, account: str, filename: str, data: bytes) -
 # ---------- review / commit ----------
 
 _EDITABLE = {"date", "amount", "description", "direction", "review_status",
-             "no_receipt", "reconciled"}
+             "no_receipt", "reconciled", "category"}
 
 
 def update_transaction(family_id: str, tid: str, patch: dict) -> dict | None:
@@ -559,6 +559,8 @@ def update_transaction(family_id: str, tid: str, patch: dict) -> dict | None:
                     continue
                 if k == "review_status" and v not in ("pending", "committed", "rejected"):
                     continue
+                if k == "category" and v and v not in business.ALL_CATEGORIES:
+                    continue   # only the accountant's buckets (empty string clears it)
                 if k in ("no_receipt", "reconciled"):
                     v = bool(v)
                 t[k] = v
