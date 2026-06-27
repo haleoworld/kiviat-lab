@@ -61,6 +61,14 @@
       <span id="reparseStatus" class="text-[11px] ml-2 text-rose-300/70"></span>
     </div>
 
+    <details id="refPanel" class="card p-3 mb-3 hidden">
+      <summary class="text-[12px] text-neutral-300 cursor-pointer">📎 Reference documents <span id="refN" class="text-neutral-600"></span></summary>
+      <p class="text-[11px] text-neutral-500 mt-2">Supporting docs kept with your books (e.g. bill-overview / payment-history screenshots). Read-only — not part of receipt matching.</p>
+      <div class="mt-2 flex items-center gap-2"><span class="text-[11px] text-neutral-500">Fiscal year</span>
+        <select id="refYear" class="fld px-2 py-1 text-[12px]"></select></div>
+      <div id="refList" class="mt-3"></div>
+    </details>
+
     <div class="card p-3 mb-3">
       <div class="flex flex-wrap items-center gap-2">
         <button id="fAttention" class="pill px-3 py-1.5 text-[12px] text-neutral-300">⚠ Needs attention</button>
@@ -367,6 +375,44 @@ document.getElementById("toggleApproved").addEventListener("click", ()=>{
   l.classList.toggle("hidden"); c.textContent=l.classList.contains("hidden")?"▸":"▾";
 });
 
+function refFileURL(name,year){ let u=`api/business/reference/file?name=${encodeURIComponent(name)}`;
+  if(year) u+=`&year=${encodeURIComponent(year)}`; if(currentFamily) u+=`&family=${encodeURIComponent(currentFamily)}`; return u; }
+let refGroups={};
+function renderRefList(){
+  const sel=document.getElementById("refYear").value;
+  const all=Object.keys(refGroups).sort((a,b)=>b.localeCompare(a));   // newest FY first
+  const keys=(sel==="all")?all:[sel].filter(k=>refGroups[k]);
+  const showHdr=keys.length>1;
+  document.getElementById("refList").innerHTML=keys.map(k=>{
+    const items=refGroups[k].map(f=>{
+      const url=refFileURL(f.name,f.year);
+      const isImg=/\.(png|jpe?g|gif|webp|heic)$/i.test(f.name);
+      const inner=isImg?`<img src="${url}" class="thumb" alt="${esc(f.name)}" loading="lazy" />`
+        :`<span class="thumb flex items-center justify-center text-neutral-500 text-xs">📄</span>`;
+      return `<a href="${url}" target="_blank" class="block">${inner}<div class="text-[10px] text-neutral-500 truncate mt-1">${esc(f.name)}</div></a>`;
+    }).join("");
+    const hdr=showHdr?`<div class="text-[10px] uppercase tracking-wider text-neutral-600 mb-1.5">${k==="Unfiled"?"Unfiled":"FY"+esc(k)}</div>`:"";
+    return `<div class="mb-3">${hdr}<div class="grid grid-cols-2 sm:grid-cols-3 gap-2">${items}</div></div>`;
+  }).join("");
+}
+async function loadReference(){
+  const panel=document.getElementById("refPanel");
+  try{
+    const r=await fetch(`api/business/reference${famQ()}`); const d=await r.json();
+    const files=d.files||[];
+    if(!files.length){ panel.classList.add("hidden"); return; }
+    panel.classList.remove("hidden");
+    document.getElementById("refN").textContent=`(${files.length})`;
+    refGroups={}; files.forEach(f=>{ const k=f.year||"Unfiled"; (refGroups[k]=refGroups[k]||[]).push(f); });
+    const keys=Object.keys(refGroups).sort((a,b)=>b.localeCompare(a));
+    const ry=document.getElementById("refYear");
+    ry.innerHTML=keys.map(k=>`<option value="${esc(k)}">${k==="Unfiled"?"Unfiled":"FY"+esc(k)}</option>`).join("")
+      + (keys.length>1?`<option value="all">All years</option>`:"");
+    ry.value=keys[0];               // default to newest fiscal year
+    ry.onchange=renderRefList;
+    renderRefList();
+  }catch(e){ panel.classList.add("hidden"); }
+}
 async function load(){
   try{
     const fr=await fetch("api/families"); const fd=await fr.json();
@@ -378,7 +424,7 @@ async function load(){
     vendors=d.vendors||[]; fYears=d.fiscal_years||[];
     populateFilters();
     document.getElementById("meta").textContent = `${fam?fam.name:"household"} · receipts in ${currency}`;
-    render(); setSaveStatus("idle");
+    render(); setSaveStatus("idle"); loadReference();
   }catch(e){ document.getElementById("meta").textContent="Couldn't load."; }
 }
 

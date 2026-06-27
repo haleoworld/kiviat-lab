@@ -219,6 +219,11 @@ function wireFilters(){
     const l=document.getElementById("orphanList"),c=document.getElementById("orphanCaret");
     l.classList.toggle("hidden"); c.textContent=l.classList.contains("hidden")?"▸":"▾";
   });
+  // Deep-link a pre-filtered view, e.g. /coverage?q=Rogers&year=2026&status=linked
+  const qp=new URLSearchParams(location.search);
+  if(qp.get("q")){ filters.search=qp.get("q"); document.getElementById("fSearch").value=qp.get("q"); }
+  if(qp.get("status")){ filters.status=qp.get("status"); document.getElementById("fStatus").value=qp.get("status"); }
+  if(qp.get("year")){ filters.year=qp.get("year"); }  // fYear options load in load(); value synced there
 }
 async function load(){
   document.getElementById("live").textContent="loading…";
@@ -228,7 +233,9 @@ async function load(){
     const fam=(fd.families||[]).find(x=>x.id===_want)||(fd.families||[]).find(x=>x.active)||(fd.families||[])[0];
     currentFamily=fam?fam.id:null;
     const r=await fetch(`api/business/coverage${famQ()}`); data=await r.json();
-    populateFilters(); render();
+    populateFilters();
+    if(filters.year && filters.year!=="all"){ const y=document.getElementById("fYear"); if(y) y.value=filters.year; }
+    render();
     document.getElementById("meta").textContent=`${fam?fam.name:"household"} · matched by amount + date`;
     document.getElementById("live").textContent="";
   }catch(e){ document.getElementById("live").textContent="couldn't load"; }

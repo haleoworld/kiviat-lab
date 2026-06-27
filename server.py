@@ -491,6 +491,38 @@ def api_business_file(rid: str, request: Request, family: Optional[str] = None):
     return FileResponse(p)
 
 
+@app.get("/api/business/reconciliation")
+def api_business_reconciliation(request: Request, family: Optional[str] = None):
+    """Read-only reference: the family's reconciliation playbook + the process (SOP) doc."""
+    if not is_authed(request):
+        raise HTTPException(401, "login required")
+    fid = _retire_family(family)
+    sop_file = paths.CODE_ROOT / "docs" / "plans" / "annual-reconciliation.md"
+    sop = sop_file.read_text() if sop_file.exists() else ""
+    return JSONResponse({"playbook": business.load_reconciliation_playbook(fid), "sop": sop})
+
+
+@app.get("/api/business/reference")
+def api_business_reference(request: Request, family: Optional[str] = None):
+    """List read-only reference documents kept with the books."""
+    if not is_authed(request):
+        raise HTTPException(401, "login required")
+    fid = _retire_family(family)
+    return JSONResponse({"files": business.list_reference_files(fid)})
+
+
+@app.get("/api/business/reference/file")
+def api_business_reference_file(name: str, request: Request, family: Optional[str] = None,
+                               year: Optional[str] = None):
+    if not is_authed(request):
+        raise HTTPException(401, "login required")
+    fid = _retire_family(family)
+    p = business.reference_file_path(fid, year, name)   # traversal-guarded
+    if p is None:
+        raise HTTPException(404, "no such reference file")
+    return FileResponse(p)
+
+
 @app.get("/api/business/file/{rid}/thumb")
 def api_business_file_thumb(rid: str, request: Request, family: Optional[str] = None):
     if not is_authed(request):

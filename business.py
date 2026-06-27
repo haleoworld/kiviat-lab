@@ -266,8 +266,64 @@ def thumbs_dir(family_id: str) -> Path:
     return business_dir(family_id) / "thumbs"
 
 
+def reference_dir(family_id: str) -> Path:
+    return business_dir(family_id) / "reference"
+
+
+def list_reference_files(family_id: str) -> list[dict]:
+    """Supporting reference documents kept with the books, organized by fiscal year:
+    reference/<FY>/<file> (e.g. account bill-overview / payment-history screenshots).
+    Read-only, not part of receipt matching. Returns [{year, name, size}]; files sitting
+    loose in reference/ (no year folder) come back with year=None."""
+    d = reference_dir(family_id)
+    if not d.exists():
+        return []
+    out = []
+    for p in sorted(d.iterdir()):
+        if p.is_dir():
+            for f in sorted(p.iterdir()):
+                if f.is_file() and not f.name.startswith("."):
+                    out.append({"year": p.name, "name": f.name, "size": f.stat().st_size})
+        elif p.is_file() and not p.name.startswith("."):
+            out.append({"year": None, "name": p.name, "size": p.stat().st_size})
+    return out
+
+
+def reference_file_path(family_id: str, year: str | None, name: str):
+    """Resolve a reference file safely (no traversal). Returns the Path only if it's a
+    plain file directly inside reference/[<year>/], else None."""
+    if "/" in name or "\\" in name or ".." in name:
+        return None
+    base = reference_dir(family_id)
+    if year:
+        if "/" in year or "\\" in year or ".." in year:
+            return None
+        base = base / year
+    p = base / name
+    if p.parent != base or not p.is_file():
+        return None
+    return p
+
+
 def receipts_path(family_id: str) -> Path:
     return business_dir(family_id) / "receipts.jsonl"
+
+
+def playbook_path(family_id: str) -> Path:
+    return business_dir(family_id) / "reconciliation_playbook.yaml"
+
+
+def load_reconciliation_playbook(family_id: str) -> dict:
+    """The family's reconciliation playbook (per-vendor receipt-acquisition profiles +
+    policies + tier order). Empty dict if not set up yet."""
+    p = playbook_path(family_id)
+    if not p.exists():
+        return {}
+    with open(p) as f:
+        data = yaml.safe_load(f) or {}
+    # YAML turns unquoted dates (e.g. `updated: 2026-06-26`) into date objects, which aren't
+    # JSON-serializable. Round-trip through json (default=str) so the API can return it safely.
+    return json.loads(json.dumps(data, default=str))
 
 
 def ensure_dirs(family_id: str) -> None:

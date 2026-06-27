@@ -89,6 +89,16 @@
       </div><!-- /corpCard -->
     </section>
 
+    <section class="mt-9 hidden" id="reconSection">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="font-semibold">Reconciliation</h2>
+        <span class="text-[11px] text-neutral-500">reference only — edit in the files for now</span>
+      </div>
+      <div id="reconBody" class="space-y-3">
+        <div class="card p-4 text-sm text-neutral-400">Loading…</div>
+      </div>
+    </section>
+
     <footer class="mt-10 text-[11px] leading-relaxed text-neutral-600">
       Changes save automatically to this household. Ages are derived from birthdays at view time.
     </footer>
@@ -315,6 +325,56 @@ async function saveCorp(){
   }catch(e){ setCorpStatus("error"); }
 }
 
+function reconURL(){ const q = currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; return "api/business/reconciliation"+q; }
+function escR(s){ return (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+async function loadRecon(){
+  // Read-only reconciliation reference, gated like the Corporation card.
+  const sec=document.getElementById("reconSection");
+  if(!currentHasBiz()){ sec.classList.add("hidden"); return; }
+  sec.classList.remove("hidden");
+  const body=document.getElementById("reconBody");
+  try{ const r=await fetch(reconURL()); const d=await r.json();
+    body.innerHTML=renderRecon(d.playbook||{}, d.sop||"");
+  }catch(e){ body.innerHTML=`<div class="card p-4 text-sm text-rose-400/80">Couldn't load reconciliation reference.</div>`; }
+}
+function renderRecon(pb, sop){
+  if(!pb || !Object.keys(pb).length){
+    return `<div class="card p-4 text-sm text-neutral-400">No reconciliation playbook saved for this household yet.</div>`;
+  }
+  const pol=pb.policies||{};
+  const polHtml=`<div class="card p-4">
+    <div class="text-[11px] uppercase tracking-wider text-neutral-500 mb-2">Policies &amp; reasoning</div>
+    <div class="text-sm"><span class="text-neutral-400">Vehicle method:</span> <span class="text-neutral-100">${escR(pol.vehicle_method||"—")}</span></div>
+    ${pol.vehicle_reasoning?`<p class="text-[12px] text-neutral-400 mt-2 leading-relaxed">${escR(pol.vehicle_reasoning)}</p>`:""}
+    ${pol.vehicle_actuals_total!=null?`<div class="text-[12px] text-neutral-400 mt-2">Vehicle actuals total (year-end): <span class="text-neutral-200">${escR(pol.vehicle_actuals_total)}</span></div>`:""}
+  </div>`;
+
+  const order=(pb.order||[]).map(o=>`<span class="pill px-2 py-0.5 text-[11px] text-neutral-300">${escR(o.tier)}. ${escR(o.name)}</span>`).join(" ");
+  const orderHtml=order?`<div class="card p-4"><div class="text-[11px] uppercase tracking-wider text-neutral-500 mb-2">Work order (easiest first)</div><div class="flex flex-wrap gap-1.5">${order}</div></div>`:"";
+
+  const vrows=(pb.vendors||[]).slice().sort((a,b)=>(a.tier||9)-(b.tier||9)).map(v=>{
+    const m=Array.isArray(v.match)?v.match.join(", "):(v.match||"");
+    const nr=v.needs_receipt===false?"no":(v.needs_receipt===true?"yes":escR(v.needs_receipt));
+    return `<tr class="border-t border-neutral-800 align-top">
+      <td class="py-1.5 pr-2 text-neutral-200">${escR(v.canonical||m)}</td>
+      <td class="py-1.5 pr-2 text-neutral-400">${escR(v.category||"—")}</td>
+      <td class="py-1.5 pr-2 text-neutral-400">${nr}</td>
+      <td class="py-1.5 pr-2 text-neutral-400">${escR(v.acquisition||"—")}</td>
+      <td class="py-1.5 pr-2 text-neutral-500">${escR(v.tier||"")}</td>
+      <td class="py-1.5 text-neutral-500 text-[11px]">${escR(v.notes||"")}</td></tr>`;
+  }).join("");
+  const vendHtml=vrows?`<details class="card p-4"><summary class="text-[11px] uppercase tracking-wider text-neutral-500 cursor-pointer">Vendor playbook (${(pb.vendors||[]).length})</summary>
+    <div class="overflow-x-auto mt-3"><table class="w-full text-[12px]">
+      <thead><tr class="text-left text-[10px] uppercase tracking-wider text-neutral-600">
+        <th class="pr-2 pb-1">Vendor</th><th class="pr-2 pb-1">Category</th><th class="pr-2 pb-1">Receipt?</th><th class="pr-2 pb-1">How to get</th><th class="pr-2 pb-1">Tier</th><th class="pb-1">Notes</th></tr></thead>
+      <tbody>${vrows}</tbody></table></div></details>`:"";
+
+  const sopHtml=sop?`<details class="card p-4"><summary class="text-[11px] uppercase tracking-wider text-neutral-500 cursor-pointer">Process (SOP)</summary>
+    <pre class="whitespace-pre-wrap text-[11px] text-neutral-400 mt-3 leading-relaxed max-h-96 overflow-y-auto">${escR(sop)}</pre></details>`:"";
+
+  return polHtml+orderHtml+vendHtml+sopHtml;
+}
+
 async function loadFamilies(){
   const r = await fetch("api/families"); const d = await r.json();
   familiesCache = d.families || [];
@@ -333,6 +393,7 @@ async function loadMembers(family){
     `${sel.options[sel.selectedIndex]?.text||""} · ${members.length} member${members.length===1?"":"s"}`;
   render(); setSaveStatus("idle");
   loadCorp();
+  loadRecon();
 }
 document.getElementById("addBizBtn").addEventListener("click", async ()=>{
   const btn=document.getElementById("addBizBtn"); btn.disabled=true; btn.textContent="Adding…";
