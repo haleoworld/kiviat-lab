@@ -129,6 +129,14 @@ const fmtN = n => (n==null||isNaN(n))?"":Number(n).toLocaleString(undefined,{min
 const esc = s => (s==null?"":String(s)).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
 function famQ(){ return currentFamily?`?family=${encodeURIComponent(currentFamily)}`:""; }
 function fileURL(id){ return `api/business/file/${id}${famQ()}`; }
+function thumbURL(id){ return `api/business/file/${id}/thumb${famQ()}`; }
+// If a PDF can't be rasterized, fall back to the old "📄 PDF · open" tile.
+function pdfThumbFail(img){
+  const span=document.createElement('span');
+  span.className='thumb flex items-center justify-center text-neutral-500 text-xs';
+  span.innerHTML='📄 PDF<br>open';
+  img.replaceWith(span);
+}
 
 function setSaveStatus(state){
   const el=document.getElementById("saveStatus");
@@ -177,7 +185,10 @@ function receiptCard(r){
   const why=(r.confidence!=="high" && r.confidence_reason)
     ? `<div class="text-[11px] text-amber-300/90 mb-2.5 leading-snug px-2.5 py-1.5 rounded-lg bg-amber-500/10">🔎 ${esc(r.confidence_reason)}</div>` : "";
   const thumb = isPdf(r)
-    ? `<a href="${fileURL(r.id)}" target="_blank" class="thumb flex items-center justify-center text-neutral-500 text-xs">📄 PDF<br>open</a>`
+    ? `<a href="${fileURL(r.id)}" target="_blank" class="block relative">
+         <img src="${thumbURL(r.id)}" class="thumb" alt="receipt PDF" onerror="pdfThumbFail(this)" />
+         <span class="absolute top-1 left-1 text-[11px] bg-black/60 rounded px-1.5 py-0.5">📄</span>
+       </a>`
     : `<a href="${fileURL(r.id)}" target="_blank"><img src="${fileURL(r.id)}" class="thumb" alt="receipt" /></a>`;
   const approved = r.review_status==="approved";
   const actions = approved

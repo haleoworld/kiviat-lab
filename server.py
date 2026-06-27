@@ -491,6 +491,17 @@ def api_business_file(rid: str, request: Request, family: Optional[str] = None):
     return FileResponse(p)
 
 
+@app.get("/api/business/file/{rid}/thumb")
+def api_business_file_thumb(rid: str, request: Request, family: Optional[str] = None):
+    if not is_authed(request):
+        raise HTTPException(401, "login required")
+    fid = _retire_family(family)
+    p = business.thumb_path(fid, rid)
+    if p is None or not p.exists():
+        raise HTTPException(404, "no thumbnail")
+    return FileResponse(p)
+
+
 # ---------- business: config (fiscal year) ----------
 
 @app.post("/api/business/enable")

@@ -262,6 +262,10 @@ def uploads_dir(family_id: str) -> Path:
     return business_dir(family_id) / "uploads"
 
 
+def thumbs_dir(family_id: str) -> Path:
+    return business_dir(family_id) / "thumbs"
+
+
 def receipts_path(family_id: str) -> Path:
     return business_dir(family_id) / "receipts.jsonl"
 
@@ -674,14 +678,43 @@ def delete_receipt(family_id: str, rid: str) -> bool:
     p = upload_path(family_id, rid)
     if p:
         p.unlink(missing_ok=True)
+    (thumbs_dir(family_id) / f"{rid}.png").unlink(missing_ok=True)
     return True
 
 
 def upload_path(family_id: str, rid: str) -> Path | None:
-    """The stored original file for a record id (for serving the thumbnail)."""
+    """The stored original file for a record id (for serving the full file)."""
     d = uploads_dir(family_id)
     if not d.exists():
         return None
     for p in d.glob(f"{rid}.*"):
         return p
+    return None
+
+
+def thumb_path(family_id: str, rid: str) -> Path | None:
+    """A small image preview for the receipts-list thumbnail. Images render inline as-is,
+    so the original is returned. PDFs have no inline preview, so rasterize page 1 once via
+    macOS Quick Look (`qlmanage`, same shell-out pattern as HEIC→JPEG) and cache it under
+    thumbs/<rid>.png. Returns None if there's no file or the PDF can't be rasterized."""
+    src = upload_path(family_id, rid)
+    if src is None:
+        return None
+    if src.suffix.lower() != ".pdf":
+        return src
+    cached = thumbs_dir(family_id) / f"{rid}.png"
+    if cached.exists():
+        return cached
+    tdir = thumbs_dir(family_id)
+    tdir.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(["qlmanage", "-t", "-s", "400", "-o", str(tdir), str(src)],
+                       capture_output=True, timeout=20)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    # qlmanage writes "<original name>.png" (i.e. "<rid>.pdf.png"); normalize to "<rid>.png".
+    produced = tdir / f"{src.name}.png"
+    if produced.exists():
+        produced.replace(cached)
+        return cached
     return None
